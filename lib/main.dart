@@ -52,6 +52,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   int _fetchCount = 0;
   bool _isSleeping = false;
+  bool _isFetchingStats = false;
   int _selectedDrawerIndex = 0;
   bool _offlineNotificationShown = false;
   bool _notificationPermissionGranted = false;
@@ -276,6 +277,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   }
 
   void _addLog(String message) {
+    if (!mounted) return;
     final timestamp = DateFormat('HH:mm:ss').format(DateTime.now());
     setState(() {
       _logs.add('[$timestamp] $message');
@@ -302,31 +304,39 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _fetchStats() async {
+    if (_isFetchingStats) return;
+    _isFetchingStats = true;
     try {
       final response = await http.get(Uri.parse('http://$laptopIp:8081/stats')).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
-        await _markOnline();
-        final data = json.decode(response.body);
-        final newCpu = (data['cpu_usage'] ?? 0.0) as num;
-        final newRam = (data['ram_usage'] ?? 0.0) as num;
-        final newTemp = (data['cpu_temp'] ?? 0.0) as num;
-        final newBattery = (data['battery_percent'] ?? 0.0) as num;
-        final newPlugged = (data['is_plugged'] ?? false) as bool;
+        final decoded = json.decode(response.body);
+        if (decoded is! Map<String, dynamic>) {
+          await _markOffline('Invalid stats payload: expected JSON object');
+          return;
+        }
+
+        final newCpu = _toDouble(decoded['cpu_usage']);
+        final newRam = _toDouble(decoded['ram_usage']);
+        final newTemp = _toDouble(decoded['cpu_temp']);
+        final newBattery = _toDouble(decoded['battery_percent']);
+        final newPlugged = _toBool(decoded['is_plugged']);
         
-        bool valuesChanged = newCpu.toDouble() != cpu || 
-                            newRam.toDouble() != ram || 
-                            newTemp.toDouble() != temp || 
-                            newBattery.toDouble() != battery || 
+        bool valuesChanged = newCpu != cpu || 
+                            newRam != ram || 
+                            newTemp != temp || 
+                            newBattery != battery || 
                             newPlugged != isPlugged;
-        
+
+        if (!mounted) return;
         setState(() {
-          cpu = newCpu.toDouble();
-          ram = newRam.toDouble();
-          temp = newTemp.toDouble();
-          battery = newBattery.toDouble();
+          cpu = newCpu;
+          ram = newRam;
+          temp = newTemp;
+          battery = newBattery;
           isPlugged = newPlugged;
         });
-        
+
+        await _markOnline();
         await _showPersistentNotification();
 
         _fetchCount++;
@@ -342,7 +352,40 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     } catch (e) {
       await _markOffline('Connection failed: ${e.toString().split('\n').first}');
       debugPrint('Error fetching stats: $e');
+    } finally {
+      _isFetchingStats = false;
     }
+  }
+
+  double _toDouble(Object? value) {
+    if (value is num) {
+      final parsed = value.toDouble();
+      return parsed.isFinite ? parsed : 0.0;
+    }
+
+    if (value is String) {
+      final parsed = double.tryParse(value.trim());
+      if (parsed != null && parsed.isFinite) {
+        return parsed;
+      }
+    }
+
+    return 0.0;
+  }
+
+  bool _toBool(Object? value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      if (normalized == 'true' || normalized == '1' || normalized == 'yes') {
+        return true;
+      }
+      if (normalized == 'false' || normalized == '0' || normalized == 'no') {
+        return false;
+      }
+    }
+    return false;
   }
 
   Future<bool> _resolveNotificationPermissionStatus() async {
