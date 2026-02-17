@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -39,9 +40,17 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   static const int _persistentNotificationId = 0;
   static const int _offlineNotificationId = 1;
+  static const EventChannel _phoneNotificationEventChannel = EventChannel(
+    'laptop_dashboard_mobile/notification_events',
+  );
+  static const MethodChannel _phoneNotificationMethodChannel = MethodChannel(
+    'laptop_dashboard_mobile/notification_sync_control',
+  );
 
   String laptopIp = 'localhost';
-  final TextEditingController _ipController = TextEditingController(text: 'localhost');
+  final TextEditingController _ipController = TextEditingController(
+    text: 'localhost',
+  );
   Timer? _timer;
   double cpu = 0.0;
   double ram = 0.0;
@@ -57,6 +66,11 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   bool _offlineNotificationShown = false;
   bool _notificationPermissionGranted = false;
   bool _notificationPermissionChecked = false;
+  bool _reverseSyncEnabled = false;
+  bool _reverseSyncPermissionGranted = false;
+  bool _reverseSyncPermissionChecked = false;
+  StreamSubscription<dynamic>? _phoneNotificationSubscription;
+  String _lastForwardedNotificationKey = '';
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -66,9 +80,11 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadLaptopIp();
+    _loadReverseSyncPreference();
     _checkAndShowWelcomeTour();
     _initializeNotifications();
     _checkAndRequestNotificationPermission();
+    _refreshReverseSyncPermissionStatus();
     _startTimer();
     _addLog('Dashboard started');
   }
@@ -81,9 +97,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => const WelcomeTourScreen(),
-        ),
+        MaterialPageRoute<void>(builder: (_) => const WelcomeTourScreen()),
       );
       if (!mounted) return;
       await prefs.setBool('has_seen_welcome_tour', true);
@@ -116,6 +130,176 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _addLog('IP changed to $laptopIp');
   }
 
+  bool get _supportsReverseSync => Platform.isAndroid;
+
+  Future<void> _loadReverseSyncPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedEnabled = prefs.getBool('reverse_sync_enabled') ?? false;
+    if (!mounted) return;
+    setState(() {
+      _reverseSyncEnabled = savedEnabled;
+    });
+    if (savedEnabled) {
+      _addLog('Reverse sync enabled');
+      _startPhoneNotificationListenerIfReady();
+    }
+  }
+
+  Future<void> _saveReverseSyncPreference(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('reverse_sync_enabled', enabled);
+  }
+
+  Future<void> _setReverseSyncEnabled(bool enabled) async {
+    if (!_supportsReverseSync) {
+      _addLog('Reverse sync requires Android');
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _reverseSyncEnabled = enabled;
+    });
+    await _saveReverseSyncPreference(enabled);
+
+    if (enabled) {
+      _addLog('Reverse sync enabled');
+      await _refreshReverseSyncPermissionStatus();
+      _startPhoneNotificationListenerIfReady();
+      return;
+    }
+
+    _addLog('Reverse sync disabled');
+    await _phoneNotificationSubscription?.cancel();
+    _phoneNotificationSubscription = null;
+  }
+
+  Future<void> _refreshReverseSyncPermissionStatus() async {
+    if (!_supportsReverseSync) {
+      if (!mounted) return;
+      setState(() {
+        _reverseSyncPermissionGranted = false;
+        _reverseSyncPermissionChecked = true;
+      });
+      return;
+    }
+
+    try {
+      final enabled =
+          await _phoneNotificationMethodChannel.invokeMethod<bool>(
+            'isNotificationAccessEnabled',
+          ) ??
+          false;
+      if (!mounted) return;
+      setState(() {
+        _reverseSyncPermissionGranted = enabled;
+        _reverseSyncPermissionChecked = true;
+      });
+      if (!enabled) {
+        await _phoneNotificationSubscription?.cancel();
+        _phoneNotificationSubscription = null;
+      }
+      _startPhoneNotificationListenerIfReady();
+    } catch (e) {
+      _addLog('Could not verify reverse sync permission: $e');
+      if (!mounted) return;
+      setState(() {
+        _reverseSyncPermissionGranted = false;
+        _reverseSyncPermissionChecked = true;
+      });
+    }
+  }
+
+  Future<void> _openReverseSyncSettings() async {
+    if (!_supportsReverseSync) return;
+    try {
+      await _phoneNotificationMethodChannel.invokeMethod(
+        'openNotificationAccessSettings',
+      );
+      _addLog('Opened Android notification access settings');
+      Future<void>.delayed(const Duration(milliseconds: 800), () {
+        _refreshReverseSyncPermissionStatus();
+      });
+    } catch (e) {
+      _addLog('Could not open notification access settings: $e');
+    }
+  }
+
+  void _startPhoneNotificationListenerIfReady() {
+    if (!_supportsReverseSync) return;
+    if (!_reverseSyncEnabled || !_reverseSyncPermissionGranted) return;
+    if (_phoneNotificationSubscription != null) return;
+
+    _phoneNotificationSubscription = _phoneNotificationEventChannel
+        .receiveBroadcastStream()
+        .listen(
+          _handlePhoneNotificationEvent,
+          onError: (Object error) {
+            _addLog('Reverse sync stream error: $error');
+          },
+        );
+
+    _addLog('Reverse sync listener started');
+  }
+
+  Future<void> _handlePhoneNotificationEvent(dynamic event) async {
+    if (!_reverseSyncEnabled || !_reverseSyncPermissionGranted) return;
+    if (event is! Map) return;
+
+    final map = Map<String, dynamic>.from(event);
+    final packageName = map['package_name']?.toString() ?? 'unknown_app';
+    final title = map['title']?.toString() ?? '';
+    final text = map['text']?.toString() ?? '';
+    final postedAt = map['posted_at'];
+    final isOngoing = _toBool(map['is_ongoing']);
+
+    if (title.isEmpty && text.isEmpty) return;
+    if (isOngoing) return;
+
+    final key = '$packageName|$title|$text|$postedAt';
+    if (key == _lastForwardedNotificationKey) return;
+    _lastForwardedNotificationKey = key;
+
+    final payload = <String, dynamic>{
+      'package_name': packageName,
+      'title': title,
+      'text': text,
+      'posted_at': postedAt,
+    };
+
+    await _forwardPhoneNotificationToLaptop(payload);
+  }
+
+  Future<void> _forwardPhoneNotificationToLaptop(
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('http://$laptopIp:8081/phone-notification'),
+            headers: const {'Content-Type': 'application/json'},
+            body: json.encode(payload),
+          )
+          .timeout(const Duration(seconds: 3));
+
+      if (response.statusCode == 200) {
+        final title = payload['title']?.toString();
+        final packageName =
+            payload['package_name']?.toString() ?? 'unknown_app';
+        final label = (title != null && title.trim().isNotEmpty)
+            ? title.trim()
+            : packageName;
+        _addLog('Forwarded phone notification: $label');
+      } else {
+        _addLog('Reverse sync failed (${response.statusCode})');
+      }
+    } on TimeoutException {
+      _addLog('Reverse sync timeout to $laptopIp');
+    } catch (e) {
+      _addLog('Reverse sync error: ${e.toString().split('\n').first}');
+    }
+  }
+
   Future<void> _initializeNotifications() async {
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -124,7 +308,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     await flutterLocalNotificationsPlugin.initialize(initializationSettings);
   }
 
-  bool get _supportsNotificationPermission => Platform.isAndroid || Platform.isIOS;
+  bool get _supportsNotificationPermission =>
+      Platform.isAndroid || Platform.isIOS;
 
   Future<void> _refreshNotificationPermissionStatus() async {
     final status = await _resolveNotificationPermissionStatus();
@@ -162,7 +347,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
 
     final requestedStatus = await Permission.notification.request();
-    final isGranted = requestedStatus.isGranted || await _resolveNotificationPermissionStatus();
+    final isGranted =
+        requestedStatus.isGranted ||
+        await _resolveNotificationPermissionStatus();
     if (!mounted) return;
     setState(() {
       _notificationPermissionGranted = isGranted;
@@ -197,8 +384,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   Future<void> _showPersistentNotification() async {
     if (!await _resolveNotificationPermissionStatus()) return;
     final String plugStatus = isPlugged ? 'Charging' : 'Discharging';
-    final AndroidNotificationDetails androidPlatformChannelSpecifics =
-        AndroidNotificationDetails(
+    final AndroidNotificationDetails
+    androidPlatformChannelSpecifics = AndroidNotificationDetails(
       'laptop_stats_channel',
       'Laptop Stats',
       channelDescription: 'Persistent notification for laptop statistics',
@@ -213,8 +400,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         'Temp: ${temp.toStringAsFixed(1)}°C | Battery: ${battery.toStringAsFixed(0)}% ($plugStatus)',
       ),
     );
-    final NotificationDetails platformChannelSpecifics =
-        NotificationDetails(android: androidPlatformChannelSpecifics);
+    final NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+    );
     await flutterLocalNotificationsPlugin.show(
       _persistentNotificationId,
       'Laptop Status: ${battery.toStringAsFixed(0)}% ($plugStatus)',
@@ -227,17 +415,18 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     if (!await _resolveNotificationPermissionStatus()) return;
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      'laptop_offline_channel',
-      'Laptop Offline',
-      channelDescription: 'Notification when laptop connection is offline',
-      importance: Importance.high,
-      priority: Priority.high,
-      ongoing: false,
-      autoCancel: true,
-      onlyAlertOnce: true,
+          'laptop_offline_channel',
+          'Laptop Offline',
+          channelDescription: 'Notification when laptop connection is offline',
+          importance: Importance.high,
+          priority: Priority.high,
+          ongoing: false,
+          autoCancel: true,
+          onlyAlertOnce: true,
+        );
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
     );
-    const NotificationDetails platformChannelSpecifics =
-        NotificationDetails(android: androidPlatformChannelSpecifics);
     await flutterLocalNotificationsPlugin.show(
       _offlineNotificationId,
       'Laptop Offline',
@@ -269,10 +458,11 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _addLog('App State: ${state.name}');
     if (state == AppLifecycleState.resumed) {
       _refreshNotificationPermissionStatus();
+      _refreshReverseSyncPermissionStatus();
       _startTimer();
     } else if (state == AppLifecycleState.paused) {
       // Keep timer running in background if we want persistent updates
-      // _timer?.cancel(); 
+      // _timer?.cancel();
     }
   }
 
@@ -283,7 +473,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       _logs.add('[$timestamp] $message');
       if (_logs.length > 100) _logs.removeAt(0);
     });
-    
+
     // Auto-scroll to bottom
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -307,7 +497,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     if (_isFetchingStats) return;
     _isFetchingStats = true;
     try {
-      final response = await http.get(Uri.parse('http://$laptopIp:8081/stats')).timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(Uri.parse('http://$laptopIp:8081/stats'))
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final decoded = json.decode(response.body);
         if (decoded is! Map<String, dynamic>) {
@@ -320,12 +512,13 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         final newTemp = _toDouble(decoded['cpu_temp']);
         final newBattery = _toDouble(decoded['battery_percent']);
         final newPlugged = _toBool(decoded['is_plugged']);
-        
-        bool valuesChanged = newCpu != cpu || 
-                            newRam != ram || 
-                            newTemp != temp || 
-                            newBattery != battery || 
-                            newPlugged != isPlugged;
+
+        bool valuesChanged =
+            newCpu != cpu ||
+            newRam != ram ||
+            newTemp != temp ||
+            newBattery != battery ||
+            newPlugged != isPlugged;
 
         if (!mounted) return;
         setState(() {
@@ -350,7 +543,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     } on TimeoutException {
       await _markOffline('Connection timeout to $laptopIp');
     } catch (e) {
-      await _markOffline('Connection failed: ${e.toString().split('\n').first}');
+      await _markOffline(
+        'Connection failed: ${e.toString().split('\n').first}',
+      );
       debugPrint('Error fetching stats: $e');
     } finally {
       _isFetchingStats = false;
@@ -395,9 +590,12 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
     if (Platform.isAndroid) {
       final androidImplementation = flutterLocalNotificationsPlugin
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       if (androidImplementation != null) {
-        final enabled = await androidImplementation.areNotificationsEnabled() ?? false;
+        final enabled =
+            await androidImplementation.areNotificationsEnabled() ?? false;
         if (mounted && enabled != _notificationPermissionGranted) {
           setState(() {
             _notificationPermissionGranted = enabled;
@@ -422,7 +620,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   Future<void> _sleepLaptop() async {
     setState(() => _isSleeping = true);
     try {
-      final response = await http.post(Uri.parse('http://$laptopIp:8081/sleep')).timeout(const Duration(seconds: 5));
+      final response = await http
+          .post(Uri.parse('http://$laptopIp:8081/sleep'))
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         _addLog('Success: Laptop putting to sleep');
       } else {
@@ -442,7 +642,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Sleep Laptop?'),
-        content: const Text('Are you sure you want to put your laptop to sleep? You will lose connection until it wakes up.'),
+        content: const Text(
+          'Are you sure you want to put your laptop to sleep? You will lose connection until it wakes up.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -465,6 +667,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _phoneNotificationSubscription?.cancel();
     _ipController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -515,7 +718,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
           ],
         ),
       ),
-      body: isSettingsPage ? _buildSettingsPage() : _buildDashboardPage(context),
+      body: isSettingsPage
+          ? _buildSettingsPage()
+          : _buildDashboardPage(context),
     );
   }
 
@@ -525,23 +730,36 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            if (_notificationPermissionChecked && !_notificationPermissionGranted)
+            if (_notificationPermissionChecked &&
+                !_notificationPermissionGranted)
               _buildNotificationPermissionCard(),
             const SizedBox(height: 20),
             const Text(
               'Hello, Aviral!',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
-            SStatusCard(cpu: cpu, ram: ram, temp: temp, battery: battery, isPlugged: isPlugged),
+            SStatusCard(
+              cpu: cpu,
+              ram: ram,
+              temp: temp,
+              battery: battery,
+              isPlugged: isPlugged,
+            ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               child: SizedBox(
                 width: double.infinity,
                 height: 60,
                 child: ElevatedButton.icon(
-                  onPressed: _isSleeping ? null : () => _showSleepConfirmation(context),
+                  onPressed: _isSleeping
+                      ? null
+                      : () => _showSleepConfirmation(context),
                   icon: _isSleeping
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.power_settings_new),
                   label: Text(_isSleeping ? 'Suspending...' : 'Sleep Laptop'),
                   style: ElevatedButton.styleFrom(
@@ -566,7 +784,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (_notificationPermissionChecked && !_notificationPermissionGranted) ...[
+            if (_notificationPermissionChecked &&
+                !_notificationPermissionGranted) ...[
               _buildNotificationPermissionCard(),
               const SizedBox(height: 12),
             ],
@@ -593,6 +812,13 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
               'Current target: $laptopIp:8081',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
+            const SizedBox(height: 24),
+            const Text(
+              'Reverse Sync',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            _buildReverseSyncCard(),
           ],
         ),
       ),
@@ -628,6 +854,59 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       ),
     );
   }
+
+  Widget _buildReverseSyncCard() {
+    if (!_supportsReverseSync) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(14),
+          child: Text('Reverse sync is currently supported on Android only.'),
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Forward phone notifications to laptop'),
+              subtitle: const Text(
+                'Pushes Android notifications to the daemon endpoint at /phone-notification.',
+              ),
+              value: _reverseSyncEnabled,
+              onChanged: _setReverseSyncEnabled,
+            ),
+            if (_reverseSyncEnabled &&
+                _reverseSyncPermissionChecked &&
+                !_reverseSyncPermissionGranted) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Notification access is required. Enable this app in Android notification access settings.',
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton(
+                  onPressed: _openReverseSyncSettings,
+                  child: const Text('Open notification access'),
+                ),
+              ),
+            ],
+            if (_reverseSyncEnabled && _reverseSyncPermissionGranted) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Notification access granted. New phone notifications will appear on your laptop.',
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class WelcomeTourScreen extends StatefulWidget {
@@ -645,17 +924,20 @@ class _WelcomeTourScreenState extends State<WelcomeTourScreen> {
     _TourPageData(
       icon: Icons.waving_hand,
       title: 'Welcome',
-      body: 'Monitor your laptop stats and send a sleep command from your phone.',
+      body:
+          'Monitor your laptop stats and send a sleep command from your phone.',
     ),
     _TourPageData(
       icon: Icons.settings,
       title: 'Set Laptop IP',
-      body: 'Open the sidebar and go to Settings to configure your laptop IP address.',
+      body:
+          'Open the sidebar and go to Settings to configure your laptop IP address.',
     ),
     _TourPageData(
       icon: Icons.bolt,
       title: 'Track Live Stats',
-      body: 'The dashboard refreshes every 2 seconds and keeps a local terminal-style log.',
+      body:
+          'The dashboard refreshes every 2 seconds and keeps a local terminal-style log.',
     ),
   ];
 
@@ -669,9 +951,7 @@ class _WelcomeTourScreenState extends State<WelcomeTourScreen> {
   Widget build(BuildContext context) {
     final isLastPage = _currentPage == _pages.length - 1;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Welcome Tour'),
-      ),
+      appBar: AppBar(title: const Text('Welcome Tour')),
       body: SafeArea(
         child: Column(
           children: [
@@ -689,11 +969,18 @@ class _WelcomeTourScreenState extends State<WelcomeTourScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(page.icon, size: 80, color: Theme.of(context).colorScheme.primary),
+                        Icon(
+                          page.icon,
+                          size: 80,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
                         const SizedBox(height: 20),
                         Text(
                           page.title,
-                          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 16),
@@ -805,7 +1092,10 @@ class SStatusCard extends StatelessWidget {
             const SizedBox(height: 8),
             _StatusRow(label: 'Temp', value: '${temp.toStringAsFixed(1)}°C'),
             const SizedBox(height: 8),
-            _StatusRow(label: 'Battery', value: '${battery.toStringAsFixed(0)}%$plugStatus'),
+            _StatusRow(
+              label: 'Battery',
+              value: '${battery.toStringAsFixed(0)}%$plugStatus',
+            ),
           ],
         ),
       ),
@@ -817,7 +1107,11 @@ class LogCard extends StatelessWidget {
   final List<String> logs;
   final ScrollController scrollController;
 
-  const LogCard({super.key, required this.logs, required this.scrollController});
+  const LogCard({
+    super.key,
+    required this.logs,
+    required this.scrollController,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -826,7 +1120,7 @@ class LogCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       color: const Color(0xFF1E1E1E), // Dark background
       clipBehavior: Clip.antiAlias,
-      child: Container(
+      child: SizedBox(
         height: 250,
         width: double.infinity,
         child: Column(
@@ -845,8 +1139,8 @@ class LogCard extends StatelessWidget {
                       Text(
                         'TERMINAL LOGS',
                         style: TextStyle(
-                          fontSize: 12, 
-                          fontWeight: FontWeight.bold, 
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
                           color: Colors.green,
                           fontFamily: 'monospace',
                         ),
@@ -856,7 +1150,7 @@ class LogCard extends StatelessWidget {
                   Text(
                     '${logs.length} entries',
                     style: const TextStyle(
-                      fontSize: 10, 
+                      fontSize: 10,
                       color: Colors.green,
                       fontFamily: 'monospace',
                     ),

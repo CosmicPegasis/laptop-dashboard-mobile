@@ -1,17 +1,39 @@
-# laptop_dashboard_mobile
+# Laptop Dashboard Mobile
 
-A new Flutter project.
+Flutter app + Python daemon for monitoring laptop stats from your phone and running remote actions.
 
-## Getting Started
+## Features
 
-This project is a starting point for a Flutter application.
+- Live laptop telemetry (CPU, RAM, temperature, battery)
+- Remote suspend (`/sleep` endpoint)
+- Persistent Android status notification with laptop stats
+- Reverse sync: forwards phone notifications to the laptop daemon (`/phone-notification`)
 
-A few resources to get you started if this is your first Flutter project:
+## Run the daemon (laptop)
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```bash
+cd daemon
+python3 stats_daemon.py
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Daemon listens on `0.0.0.0:8081`.
+
+## Run the app (phone)
+
+```bash
+flutter pub get
+flutter run
+```
+
+## Reverse sync setup
+
+1. In the app, open `Settings`.
+2. Enable `Forward phone notifications to laptop`.
+3. Tap `Open notification access` and allow this app.
+4. Keep the daemon running on your laptop.
+
+When enabled, new phone notifications are POSTed to:
+
+- `http://<laptop-ip>:8081/phone-notification`
+
+The daemon logs each event and attempts a desktop popup using `notify-send` if installed.

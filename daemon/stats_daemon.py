@@ -5,6 +5,7 @@ import time
 import logging
 import sys
 import subprocess
+from shutil import which
 from logging.handlers import RotatingFileHandler
 
 # Configure logging
@@ -37,6 +38,54 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"status": "success", "message": "Suspending system"}).encode())
             except Exception as e:
                 logger.error(f"Error putting system to sleep: {e}")
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
+        elif self.path == '/phone-notification':
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw_payload = self.rfile.read(length) if length > 0 else b"{}"
+                payload = json.loads(raw_payload.decode("utf-8"))
+
+                app_name = str(payload.get("package_name", "unknown_app"))[:200]
+                title = str(payload.get("title", "")).strip()[:200]
+                text = str(payload.get("text", "")).strip()[:500]
+                posted_at = payload.get("posted_at")
+
+                if not title and not text:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"status": "error", "message": "Missing title/text"}).encode())
+                    return
+
+                logger.info(
+                    "Phone notification from %s | title=%s | text=%s | posted_at=%s",
+                    app_name,
+                    title or "(no title)",
+                    text or "(no text)",
+                    posted_at,
+                )
+
+                if which("notify-send"):
+                    summary = f"Phone: {title}" if title else "Phone notification"
+                    body = text if text else app_name
+                    subprocess.run(
+                        ["notify-send", "--app-name=Phone Sync", summary[:200], body[:500]],
+                        check=False
+                    )
+                else:
+                    logger.warning("notify-send not found; skipping desktop popup")
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode("utf-8"))
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": "Invalid JSON payload"}).encode())
+            except Exception as e:
+                logger.error(f"Error processing phone notification: {e}")
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
