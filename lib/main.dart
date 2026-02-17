@@ -64,6 +64,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   bool _isFetchingStats = false;
   int _selectedDrawerIndex = 0;
   bool _offlineNotificationShown = false;
+  int _consecutiveFailures = 0;
+  static const int _maxFailuresBeforeOffline = 20;
   bool _notificationPermissionGranted = false;
   bool _notificationPermissionChecked = false;
   bool _reverseSyncEnabled = false;
@@ -488,6 +490,11 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _markOffline(String reason) async {
+    _consecutiveFailures++;
+    if (_consecutiveFailures < _maxFailuresBeforeOffline) {
+      _addLog('Sync attempt failed ($_consecutiveFailures/$_maxFailuresBeforeOffline): $reason');
+      return;
+    }
     if (_offlineNotificationShown) return;
     _offlineNotificationShown = true;
     await _showOfflineNotification();
@@ -495,6 +502,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _markOnline() async {
+    _consecutiveFailures = 0;
     if (!_offlineNotificationShown) return;
     _offlineNotificationShown = false;
     await _clearOfflineNotification();
