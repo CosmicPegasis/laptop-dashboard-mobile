@@ -74,6 +74,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
+  Future<void>? _notificationInitFuture;
+  bool _notificationPluginInitialized = false;
 
   @override
   void initState() {
@@ -82,11 +84,16 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _loadLaptopIp();
     _loadReverseSyncPreference();
     _checkAndShowWelcomeTour();
-    _initializeNotifications();
-    _checkAndRequestNotificationPermission();
+    _notificationInitFuture = _initializeNotifications();
+    unawaited(_bootstrapNotificationPermission());
     _refreshReverseSyncPermissionStatus();
     _startTimer();
     _addLog('Dashboard started');
+  }
+
+  Future<void> _bootstrapNotificationPermission() async {
+    await _ensureNotificationsInitialized();
+    await _checkAndRequestNotificationPermission();
   }
 
   Future<void> _checkAndShowWelcomeTour() async {
@@ -305,7 +312,29 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
-    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+    try {
+      await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+      _notificationPluginInitialized = true;
+    } on PlatformException catch (e) {
+      _notificationPluginInitialized = false;
+      _addLog(
+        'Notification initialization failed: ${e.code}'
+        '${e.message == null ? '' : ' (${e.message})'}',
+      );
+    } catch (e) {
+      _notificationPluginInitialized = false;
+      _addLog(
+        'Notification initialization failed: ${e.toString().split('\n').first}',
+      );
+    }
+  }
+
+  Future<void> _ensureNotificationsInitialized() async {
+    if (_notificationPluginInitialized) {
+      return;
+    }
+    _notificationInitFuture ??= _initializeNotifications();
+    await _notificationInitFuture;
   }
 
   bool get _supportsNotificationPermission =>
@@ -403,7 +432,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     final NotificationDetails platformChannelSpecifics = NotificationDetails(
       android: androidPlatformChannelSpecifics,
     );
-    await flutterLocalNotificationsPlugin.show(
+    await _showNotificationSafely(
       _persistentNotificationId,
       'Laptop Status: ${battery.toStringAsFixed(0)}% ($plugStatus)',
       'CPU: ${cpu.toStringAsFixed(1)}% | RAM: ${ram.toStringAsFixed(1)}%',
@@ -427,12 +456,31 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     const NotificationDetails platformChannelSpecifics = NotificationDetails(
       android: androidPlatformChannelSpecifics,
     );
-    await flutterLocalNotificationsPlugin.show(
+    await _showNotificationSafely(
       _offlineNotificationId,
       'Laptop Offline',
       'Cannot reach $laptopIp. We will notify again after it reconnects and goes offline later.',
       platformChannelSpecifics,
     );
+  }
+
+  Future<void> _showNotificationSafely(
+    int id,
+    String title,
+    String body,
+    NotificationDetails details,
+  ) async {
+    await _ensureNotificationsInitialized();
+    try {
+      await flutterLocalNotificationsPlugin.show(id, title, body, details);
+    } on PlatformException catch (e) {
+      _addLog(
+        'Notification show failed: ${e.code}'
+        '${e.message == null ? '' : ' (${e.message})'}',
+      );
+    } catch (e) {
+      _addLog('Notification show failed: ${e.toString().split('\n').first}');
+    }
   }
 
   Future<void> _clearOfflineNotification() async {
@@ -588,21 +636,34 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       return true;
     }
 
+    await _ensureNotificationsInitialized();
+
     if (Platform.isAndroid) {
-      final androidImplementation = flutterLocalNotificationsPlugin
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >();
-      if (androidImplementation != null) {
-        final enabled =
-            await androidImplementation.areNotificationsEnabled() ?? false;
-        if (mounted && enabled != _notificationPermissionGranted) {
-          setState(() {
-            _notificationPermissionGranted = enabled;
-            _notificationPermissionChecked = true;
-          });
+      try {
+        final androidImplementation = flutterLocalNotificationsPlugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
+        if (androidImplementation != null) {
+          final enabled =
+              await androidImplementation.areNotificationsEnabled() ?? false;
+          if (mounted && enabled != _notificationPermissionGranted) {
+            setState(() {
+              _notificationPermissionGranted = enabled;
+              _notificationPermissionChecked = true;
+            });
+          }
+          return enabled;
         }
-        return enabled;
+      } on PlatformException catch (e) {
+        _addLog(
+          'areNotificationsEnabled failed: ${e.code}'
+          '${e.message == null ? '' : ' (${e.message})'}',
+        );
+      } catch (e) {
+        _addLog(
+          'areNotificationsEnabled failed: ${e.toString().split('\n').first}',
+        );
       }
     }
 
