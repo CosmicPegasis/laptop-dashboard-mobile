@@ -1,19 +1,53 @@
-# AGENTS.md
+# Laptop Dashboard Mobile
 
-## Project Overview
-Flutter mobile app with a Python daemon.
+Flutter-based mobile app and Python daemon for monitoring laptop statistics and performing remote actions (like sleep).
+
+## Project Structure
+
+- `lib/`: Flutter mobile app source code.
+  - `main.dart`: Core application logic, including UI, state management, and notification handling.
+- `daemon/`: Python daemon that runs on the laptop.
+  - `stats_daemon.py`: Collects CPU, RAM, Temperature, and Battery stats and serves them over HTTP (port 8081).
+- `android/`: Android-specific configuration and build files.
+
+## Features
+
+- **Real-time Monitoring**: Tracks CPU usage, RAM usage, CPU temperature, and Battery percentage.
+- **Persistent Notifications**: Displays live laptop statistics in the Android status bar.
+- **Remote Sleep**: Put the laptop to sleep directly from the mobile app via `systemctl suspend`.
+- **IP Persistence**: Remembers the laptop's IP address across app launches.
+- **Welcome Tour**: A walkthrough for first-time users.
+- **Settings Menu**: Sidebar (Drawer) navigation to separate Dashboard and Settings.
 
 ## Tech Stack
-- **Mobile**: Flutter (Dart)
-- **Daemon**: Python (`http.server`, `psutil`)
 
-## Build Instructions
-- Build Android APK: `flutter build apk --release`
+- **Frontend**: Flutter (Dart)
+  - `http`: For daemon API requests.
+  - `flutter_local_notifications`: For persistent status bar updates.
+  - `shared_preferences`: For persisting IP and onboarding state.
+- **Backend**: Python 3
+  - `psutil`: For system statistics.
+  - `upower`: Fallback for battery statistics on certain Linux setups.
+  - `http.server`: Minimal API server.
 
-## Dev Tips
-- The stats daemon runs on port `8081`.
-- Log files are located at `daemon/stats_daemon.log`.
+## Build & Run
 
-## Conventions
-- Use standard logging practices for both Flutter and Python components.
-- Keep manifest permissions updated when adding new features that require system access.
+### Daemon
+```bash
+cd daemon
+python3 stats_daemon.py
+```
+
+### Mobile App
+```bash
+# Get dependencies
+flutter pub get
+
+# Build APK
+flutter build apk --release
+```
+
+## Maintenance
+
+- **Daemon Logs**: Located at `daemon/stats_daemon.log`.
+- **Git Repository**: [https://github.com/CosmicPegasis/laptop-dashboard-mobile](https://github.com/CosmicPegasis/laptop-dashboard-mobile)

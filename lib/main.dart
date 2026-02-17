@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() async {
@@ -35,6 +37,9 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
+  static const int _persistentNotificationId = 0;
+  static const int _offlineNotificationId = 1;
+
   String laptopIp = 'localhost';
   final TextEditingController _ipController = TextEditingController(text: 'localhost');
   Timer? _timer;
@@ -48,6 +53,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   int _fetchCount = 0;
   bool _isSleeping = false;
   int _selectedDrawerIndex = 0;
+  bool _offlineNotificationShown = false;
+  bool _notificationPermissionGranted = false;
+  bool _notificationPermissionChecked = false;
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -59,6 +67,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _loadLaptopIp();
     _checkAndShowWelcomeTour();
     _initializeNotifications();
+    _checkAndRequestNotificationPermission();
     _startTimer();
     _addLog('Dashboard started');
   }
@@ -114,7 +123,78 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     await flutterLocalNotificationsPlugin.initialize(initializationSettings);
   }
 
+  bool get _supportsNotificationPermission => Platform.isAndroid || Platform.isIOS;
+
+  Future<void> _refreshNotificationPermissionStatus() async {
+    final status = await _resolveNotificationPermissionStatus();
+    if (!mounted) return;
+    setState(() {
+      _notificationPermissionGranted = status;
+      _notificationPermissionChecked = true;
+    });
+
+    if (status && !_offlineNotificationShown) {
+      await _showPersistentNotification();
+    }
+  }
+
+  Future<void> _checkAndRequestNotificationPermission() async {
+    if (!_supportsNotificationPermission) {
+      if (mounted) {
+        setState(() {
+          _notificationPermissionGranted = true;
+          _notificationPermissionChecked = true;
+        });
+      }
+      return;
+    }
+
+    final currentStatus = await _resolveNotificationPermissionStatus();
+    if (currentStatus) {
+      if (!mounted) return;
+      setState(() {
+        _notificationPermissionGranted = true;
+        _notificationPermissionChecked = true;
+      });
+      _addLog('Notifications permission granted');
+      return;
+    }
+
+    final requestedStatus = await Permission.notification.request();
+    final isGranted = requestedStatus.isGranted || await _resolveNotificationPermissionStatus();
+    if (!mounted) return;
+    setState(() {
+      _notificationPermissionGranted = isGranted;
+      _notificationPermissionChecked = true;
+    });
+
+    if (isGranted) {
+      _addLog('Notifications permission granted');
+      if (!_offlineNotificationShown) {
+        await _showPersistentNotification();
+      }
+      return;
+    }
+
+    if (requestedStatus.isPermanentlyDenied) {
+      _addLog('Notifications permission permanently denied');
+      return;
+    }
+
+    _addLog('Notifications permission denied');
+  }
+
+  Future<void> _requestNotificationPermissionFromSettings() async {
+    await _checkAndRequestNotificationPermission();
+    if (_notificationPermissionGranted) return;
+
+    final status = await Permission.notification.status;
+    if (!mounted || !status.isPermanentlyDenied) return;
+    await openAppSettings();
+  }
+
   Future<void> _showPersistentNotification() async {
+    if (!await _resolveNotificationPermissionStatus()) return;
     final String plugStatus = isPlugged ? 'Charging' : 'Discharging';
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
@@ -135,17 +215,59 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     final NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
     await flutterLocalNotificationsPlugin.show(
-      0,
+      _persistentNotificationId,
       'Laptop Status: ${battery.toStringAsFixed(0)}% ($plugStatus)',
       'CPU: ${cpu.toStringAsFixed(1)}% | RAM: ${ram.toStringAsFixed(1)}%',
       platformChannelSpecifics,
     );
   }
 
+  Future<void> _showOfflineNotification() async {
+    if (!await _resolveNotificationPermissionStatus()) return;
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'laptop_offline_channel',
+      'Laptop Offline',
+      channelDescription: 'Notification when laptop connection is offline',
+      importance: Importance.high,
+      priority: Priority.high,
+      ongoing: false,
+      autoCancel: true,
+      onlyAlertOnce: true,
+    );
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+    await flutterLocalNotificationsPlugin.show(
+      _offlineNotificationId,
+      'Laptop Offline',
+      'Cannot reach $laptopIp. We will notify again after it reconnects and goes offline later.',
+      platformChannelSpecifics,
+    );
+  }
+
+  Future<void> _clearOfflineNotification() async {
+    await flutterLocalNotificationsPlugin.cancel(_offlineNotificationId);
+  }
+
+  Future<void> _markOffline(String reason) async {
+    if (_offlineNotificationShown) return;
+    _offlineNotificationShown = true;
+    await _showOfflineNotification();
+    _addLog(reason);
+  }
+
+  Future<void> _markOnline() async {
+    if (!_offlineNotificationShown) return;
+    _offlineNotificationShown = false;
+    await _clearOfflineNotification();
+    _addLog('Connection restored to $laptopIp');
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _addLog('App State: ${state.name}');
     if (state == AppLifecycleState.resumed) {
+      _refreshNotificationPermissionStatus();
       _startTimer();
     } else if (state == AppLifecycleState.paused) {
       // Keep timer running in background if we want persistent updates
@@ -183,6 +305,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     try {
       final response = await http.get(Uri.parse('http://$laptopIp:8081/stats')).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
+        await _markOnline();
         final data = json.decode(response.body);
         final newCpu = (data['cpu_usage'] ?? 0.0) as num;
         final newRam = (data['ram_usage'] ?? 0.0) as num;
@@ -204,7 +327,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
           isPlugged = newPlugged;
         });
         
-        _showPersistentNotification();
+        await _showPersistentNotification();
 
         _fetchCount++;
         if (valuesChanged || _fetchCount % 5 == 0) {
@@ -212,14 +335,45 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
           _addLog('Stats updated ($reason)');
         }
       } else {
-        _addLog('Error: Server returned ${response.statusCode}');
+        await _markOffline('Error: Server returned ${response.statusCode}');
       }
     } on TimeoutException {
-      _addLog('Connection timeout to $laptopIp');
+      await _markOffline('Connection timeout to $laptopIp');
     } catch (e) {
-      _addLog('Connection failed: ${e.toString().split('\n').first}');
+      await _markOffline('Connection failed: ${e.toString().split('\n').first}');
       debugPrint('Error fetching stats: $e');
     }
+  }
+
+  Future<bool> _resolveNotificationPermissionStatus() async {
+    if (!_supportsNotificationPermission) {
+      return true;
+    }
+
+    if (Platform.isAndroid) {
+      final androidImplementation = flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      if (androidImplementation != null) {
+        final enabled = await androidImplementation.areNotificationsEnabled() ?? false;
+        if (mounted && enabled != _notificationPermissionGranted) {
+          setState(() {
+            _notificationPermissionGranted = enabled;
+            _notificationPermissionChecked = true;
+          });
+        }
+        return enabled;
+      }
+    }
+
+    final status = await Permission.notification.status;
+    final granted = status.isGranted;
+    if (mounted && granted != _notificationPermissionGranted) {
+      setState(() {
+        _notificationPermissionGranted = granted;
+        _notificationPermissionChecked = true;
+      });
+    }
+    return granted;
   }
 
   Future<void> _sleepLaptop() async {
@@ -328,6 +482,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
+            if (_notificationPermissionChecked && !_notificationPermissionGranted)
+              _buildNotificationPermissionCard(),
             const SizedBox(height: 20),
             const Text(
               'Hello, Aviral!',
@@ -367,6 +523,10 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_notificationPermissionChecked && !_notificationPermissionGranted) ...[
+              _buildNotificationPermissionCard(),
+              const SizedBox(height: 12),
+            ],
             const Text(
               'Connection Settings',
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
@@ -389,6 +549,36 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
             Text(
               'Current target: $laptopIp:8081',
               style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotificationPermissionCard() {
+    return Card(
+      color: Colors.orange.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Notifications are disabled',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Enable notifications to keep live laptop status updates in the notification tray.',
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton(
+                onPressed: _requestNotificationPermissionFromSettings,
+                child: const Text('Enable notifications'),
+              ),
             ),
           ],
         ),
