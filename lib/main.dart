@@ -31,7 +31,7 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
+class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   String laptopIp = 'localhost';
   final TextEditingController _ipController = TextEditingController(text: 'localhost');
   Timer? _timer;
@@ -40,19 +40,42 @@ class _MyHomePageState extends State<MyHomePage> {
   double temp = 0.0;
   final List<String> _logs = [];
   final ScrollController _scrollController = ScrollController();
+  int _fetchCount = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _startTimer();
     _addLog('Dashboard started');
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _addLog('App State: ${state.name}');
+    if (state == AppLifecycleState.resumed) {
+      _startTimer();
+    } else if (state == AppLifecycleState.paused) {
+      _timer?.cancel();
+    }
   }
 
   void _addLog(String message) {
     final timestamp = DateFormat('HH:mm:ss').format(DateTime.now());
     setState(() {
-      _logs.insert(0, '[$timestamp] $message');
-      if (_logs.length > 50) _logs.removeLast();
+      _logs.add('[$timestamp] $message');
+      if (_logs.length > 100) _logs.removeAt(0);
+    });
+    
+    // Auto-scroll to bottom
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
     });
   }
 
@@ -65,26 +88,40 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _fetchStats() async {
     try {
-      final response = await http.get(Uri.parse('http://$laptopIp:8081/stats'));
+      final response = await http.get(Uri.parse('http://$laptopIp:8081/stats')).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        final newCpu = (data['cpu_usage'] as num).toDouble();
+        final newRam = (data['ram_usage'] as num).toDouble();
+        final newTemp = (data['cpu_temp'] as num).toDouble();
+        
+        bool valuesChanged = newCpu != cpu || newRam != ram || newTemp != temp;
+        
         setState(() {
-          cpu = (data['cpu_usage'] as num).toDouble();
-          ram = (data['ram_usage'] as num).toDouble();
-          temp = (data['cpu_temp'] as num).toDouble();
+          cpu = newCpu;
+          ram = newRam;
+          temp = newTemp;
         });
-        // Optional: _addLog('Updated stats from $laptopIp');
+        
+        _fetchCount++;
+        if (valuesChanged || _fetchCount % 5 == 0) {
+          String reason = valuesChanged ? 'values changed' : 'periodic sync';
+          _addLog('Stats updated ($reason)');
+        }
       } else {
         _addLog('Error: Server returned ${response.statusCode}');
       }
+    } on TimeoutException {
+      _addLog('Connection timeout to $laptopIp');
     } catch (e) {
-      _addLog('Connection failed: $e');
+      _addLog('Connection failed: ${e.toString().split('\n').first}');
       debugPrint('Error fetching stats: $e');
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _ipController.dispose();
     _scrollController.dispose();
@@ -186,47 +223,68 @@ class LogCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      elevation: 2,
+      elevation: 8,
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      color: Colors.black.withOpacity(0.05),
+      color: const Color(0xFF1E1E1E), // Dark background
+      clipBehavior: Clip.antiAlias,
       child: Container(
-        height: 200,
-        padding: const EdgeInsets.all(12),
+        height: 250,
         width: double.infinity,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Event Logs',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blueGrey),
-                ),
-                Text(
-                  '${logs.length} entries',
-                  style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
-                ),
-              ],
-            ),
-            const Divider(),
-            Expanded(
-              child: ListView.builder(
-                controller: scrollController,
-                itemCount: logs.length,
-                itemBuilder: (context, index) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Text(
-                      logs[index],
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                        color: Colors.black87,
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              color: Colors.black,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.terminal, color: Colors.green, size: 16),
+                      SizedBox(width: 8),
+                      Text(
+                        'TERMINAL LOGS',
+                        style: TextStyle(
+                          fontSize: 12, 
+                          fontWeight: FontWeight.bold, 
+                          color: Colors.green,
+                          fontFamily: 'monospace',
+                        ),
                       ),
+                    ],
+                  ),
+                  Text(
+                    '${logs.length} entries',
+                    style: const TextStyle(
+                      fontSize: 10, 
+                      color: Colors.green,
+                      fontFamily: 'monospace',
                     ),
-                  );
-                },
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                child: ListView.builder(
+                  controller: scrollController,
+                  itemCount: logs.length,
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 1),
+                      child: Text(
+                        logs[index],
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Color(0xFFD4D4D4), // Light grey text
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
           ],
