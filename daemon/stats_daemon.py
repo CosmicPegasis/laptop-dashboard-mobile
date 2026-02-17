@@ -4,6 +4,7 @@ import psutil
 import time
 import logging
 import sys
+import subprocess
 from logging.handlers import RotatingFileHandler
 
 # Configure logging
