@@ -52,6 +52,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     text: 'localhost',
   );
   Timer? _timer;
+  int _pollingIntervalSeconds = 2;
+  static const int _minPollingIntervalSeconds = 1;
+  static const int _maxPollingIntervalSeconds = 30;
   double cpu = 0.0;
   double ram = 0.0;
   double temp = 0.0;
@@ -84,6 +87,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadLaptopIp();
+    _loadPollingInterval();
     _loadReverseSyncPreference();
     _checkAndShowWelcomeTour();
     _notificationInitFuture = _initializeNotifications();
@@ -127,6 +131,41 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   Future<void> _saveLaptopIp(String ip) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('laptop_ip', ip);
+  }
+
+  Future<void> _loadPollingInterval() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedInterval = prefs.getInt('polling_interval_seconds');
+    final normalized = (savedInterval ?? _pollingIntervalSeconds).clamp(
+      _minPollingIntervalSeconds,
+      _maxPollingIntervalSeconds,
+    );
+    if (!mounted) return;
+    setState(() {
+      _pollingIntervalSeconds = normalized;
+    });
+    _startTimer();
+    _addLog('Polling interval set to ${_pollingIntervalSeconds}s');
+  }
+
+  Future<void> _savePollingInterval(int seconds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('polling_interval_seconds', seconds);
+  }
+
+  Future<void> _setPollingInterval(int seconds) async {
+    final normalized = seconds.clamp(
+      _minPollingIntervalSeconds,
+      _maxPollingIntervalSeconds,
+    );
+    if (normalized == _pollingIntervalSeconds) return;
+    if (!mounted) return;
+    setState(() {
+      _pollingIntervalSeconds = normalized;
+    });
+    await _savePollingInterval(normalized);
+    _startTimer();
+    _addLog('Polling interval changed to ${_pollingIntervalSeconds}s');
   }
 
   void _updateLaptopIp(String value) {
@@ -492,7 +531,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   Future<void> _markOffline(String reason) async {
     _consecutiveFailures++;
     if (_consecutiveFailures < _maxFailuresBeforeOffline) {
-      _addLog('Sync attempt failed ($_consecutiveFailures/$_maxFailuresBeforeOffline): $reason');
+      _addLog(
+        'Sync attempt failed ($_consecutiveFailures/$_maxFailuresBeforeOffline): $reason',
+      );
       return;
     }
     if (!_offlineNotificationShown) {
@@ -545,7 +586,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
   void _startTimer() {
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 2), (timer) {
+    _timer = Timer.periodic(Duration(seconds: _pollingIntervalSeconds), (
+      timer,
+    ) {
       _fetchStats();
     });
   }
@@ -880,6 +923,27 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
             const SizedBox(height: 10),
             Text(
               'Current target: $laptopIp:8081',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Polling interval',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Slider(
+              min: _minPollingIntervalSeconds.toDouble(),
+              max: _maxPollingIntervalSeconds.toDouble(),
+              divisions:
+                  _maxPollingIntervalSeconds - _minPollingIntervalSeconds,
+              label: '${_pollingIntervalSeconds}s',
+              value: _pollingIntervalSeconds.toDouble(),
+              onChanged: (value) {
+                _setPollingInterval(value.round());
+              },
+            ),
+            Text(
+              'Current interval: ${_pollingIntervalSeconds}s',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 24),
