@@ -5,6 +5,7 @@ import android.content.Context
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.util.Log
 import io.flutter.plugin.common.EventChannel
 
 object NotificationSyncBridge {
@@ -25,6 +26,13 @@ object NotificationSyncBridge {
 }
 
 class PhoneNotificationListenerService : NotificationListenerService() {
+    private val TAG = "PhoneNotificationSvc"
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        Log.i(TAG, "NotificationListenerService connected and ready")
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName) {
             return
@@ -44,6 +52,12 @@ class PhoneNotificationListenerService : NotificationListenerService() {
             "is_ongoing" to sbn.isOngoing
         )
 
-        NotificationSyncBridge.eventSink?.success(payload)
+        val sink = NotificationSyncBridge.eventSink
+        if (sink != null) {
+            Log.d(TAG, "Forwarding notification from ${sbn.packageName}: $title")
+            sink.success(payload)
+        } else {
+            Log.w(TAG, "EventSink is null, dropping notification from ${sbn.packageName}: $title")
+        }
     }
 }
