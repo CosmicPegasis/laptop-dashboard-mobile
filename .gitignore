@@ -1,0 +1,41 @@
+# Flutter/Dart
+.dart_tool/
+build/
+.packages
+.pub-cache/
+.pub/
+android-sdk-linux/
+
+# Android
+.gradle/
+local.properties
+*.keystore
+*.jks
+*.apk
+*.aab
+
+# iOS
+.generated/
+Flutter/App.framework
+Flutter/Flutter.framework
+Flutter/Flutter.podspec
+Pods/
+*.mode1v3
+*.mode2v3
+*.moved-aside
+*.pbxuser
+*.perspectivev3
+**/.DS_Store
+DerivedData/
+build/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.swp
+*.patch
+*.diff
+
+# Mac
+.DS_Store
