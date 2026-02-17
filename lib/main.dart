@@ -495,10 +495,11 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       _addLog('Sync attempt failed ($_consecutiveFailures/$_maxFailuresBeforeOffline): $reason');
       return;
     }
-    if (_offlineNotificationShown) return;
-    _offlineNotificationShown = true;
-    await _showOfflineNotification();
-    _addLog(reason);
+    if (!_offlineNotificationShown) {
+      _offlineNotificationShown = true;
+      await _showOfflineNotification();
+      _addLog(reason);
+    }
   }
 
   Future<void> _markOnline() async {
