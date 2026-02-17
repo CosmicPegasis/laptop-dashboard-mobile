@@ -47,6 +47,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   int _fetchCount = 0;
   bool _isSleeping = false;
+  int _selectedDrawerIndex = 0;
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -56,9 +57,28 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadLaptopIp();
+    _checkAndShowWelcomeTour();
     _initializeNotifications();
     _startTimer();
     _addLog('Dashboard started');
+  }
+
+  Future<void> _checkAndShowWelcomeTour() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasSeenTour = prefs.getBool('has_seen_welcome_tour') ?? false;
+    if (hasSeenTour || !mounted) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => const WelcomeTourScreen(),
+        ),
+      );
+      if (!mounted) return;
+      await prefs.setBool('has_seen_welcome_tour', true);
+      _addLog('Welcome tour completed');
+    });
   }
 
   Future<void> _loadLaptopIp() async {
@@ -74,6 +94,16 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   Future<void> _saveLaptopIp(String ip) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('laptop_ip', ip);
+  }
+
+  void _updateLaptopIp(String value) {
+    final newIp = value.trim().isEmpty ? 'localhost' : value.trim();
+    if (newIp == laptopIp) return;
+    setState(() {
+      laptopIp = newIp;
+    });
+    _saveLaptopIp(newIp);
+    _addLog('IP changed to $laptopIp');
   }
 
   Future<void> _initializeNotifications() async {
@@ -245,69 +275,264 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final isSettingsPage = _selectedDrawerIndex == 1;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Laptop Dashboard'),
+        title: Text(isSettingsPage ? 'Settings' : 'Laptop Dashboard'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: SingleChildScrollView(
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              const SizedBox(height: 20),
-              const Text(
-                'Hello, Aviral!',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 10),
-                child: TextField(
-                  controller: _ipController,
-                  decoration: const InputDecoration(
-                    labelText: 'Laptop IP',
-                    hintText: 'e.g. 192.168.1.10',
-                    border: OutlineInputBorder(),
-                  ),
-                  onChanged: (value) {
-                    final newIp = value.trim().isEmpty ? 'localhost' : value.trim();
-                    if (newIp != laptopIp) {
-                      setState(() {
-                        laptopIp = newIp;
-                      });
-                      _saveLaptopIp(newIp);
-                      _addLog('IP changed to $laptopIp');
-                    }
-                  },
+              child: const Align(
+                alignment: Alignment.bottomLeft,
+                child: Text(
+                  'Laptop Dashboard',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                 ),
               ),
-              SStatusCard(cpu: cpu, ram: ram, temp: temp, battery: battery, isPlugged: isPlugged),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 60,
-                  child: ElevatedButton.icon(
-                    onPressed: _isSleeping ? null : () => _showSleepConfirmation(context),
-                    icon: _isSleeping 
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.power_settings_new),
-                    label: Text(_isSleeping ? 'Suspending...' : 'Sleep Laptop'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange.shade100,
-                      foregroundColor: Colors.orange.shade900,
-                    ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.dashboard),
+              title: const Text('Dashboard'),
+              selected: _selectedDrawerIndex == 0,
+              onTap: () {
+                setState(() => _selectedDrawerIndex = 0);
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings),
+              title: const Text('Settings'),
+              selected: _selectedDrawerIndex == 1,
+              onTap: () {
+                setState(() => _selectedDrawerIndex = 1);
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+      ),
+      body: isSettingsPage ? _buildSettingsPage() : _buildDashboardPage(context),
+    );
+  }
+
+  Widget _buildDashboardPage(BuildContext context) {
+    return SingleChildScrollView(
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            const SizedBox(height: 20),
+            const Text(
+              'Hello, Aviral!',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            SStatusCard(cpu: cpu, ram: ram, temp: temp, battery: battery, isPlugged: isPlugged),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              child: SizedBox(
+                width: double.infinity,
+                height: 60,
+                child: ElevatedButton.icon(
+                  onPressed: _isSleeping ? null : () => _showSleepConfirmation(context),
+                  icon: _isSleeping
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.power_settings_new),
+                  label: Text(_isSleeping ? 'Suspending...' : 'Sleep Laptop'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange.shade100,
+                    foregroundColor: Colors.orange.shade900,
                   ),
                 ),
               ),
-              LogCard(logs: _logs, scrollController: _scrollController),
-              const SizedBox(height: 20),
-            ],
-          ),
+            ),
+            LogCard(logs: _logs, scrollController: _scrollController),
+            const SizedBox(height: 20),
+          ],
         ),
       ),
     );
   }
+
+  Widget _buildSettingsPage() {
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Connection Settings',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Set the laptop IP or hostname used for daemon requests.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _ipController,
+              decoration: const InputDecoration(
+                labelText: 'Laptop IP',
+                hintText: 'e.g. 192.168.1.10',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: _updateLaptopIp,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Current target: $laptopIp:8081',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class WelcomeTourScreen extends StatefulWidget {
+  const WelcomeTourScreen({super.key});
+
+  @override
+  State<WelcomeTourScreen> createState() => _WelcomeTourScreenState();
+}
+
+class _WelcomeTourScreenState extends State<WelcomeTourScreen> {
+  final PageController _pageController = PageController();
+  int _currentPage = 0;
+
+  final List<_TourPageData> _pages = const [
+    _TourPageData(
+      icon: Icons.waving_hand,
+      title: 'Welcome',
+      body: 'Monitor your laptop stats and send a sleep command from your phone.',
+    ),
+    _TourPageData(
+      icon: Icons.settings,
+      title: 'Set Laptop IP',
+      body: 'Open the sidebar and go to Settings to configure your laptop IP address.',
+    ),
+    _TourPageData(
+      icon: Icons.bolt,
+      title: 'Track Live Stats',
+      body: 'The dashboard refreshes every 2 seconds and keeps a local terminal-style log.',
+    ),
+  ];
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isLastPage = _currentPage == _pages.length - 1;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Welcome Tour'),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: PageView.builder(
+                controller: _pageController,
+                itemCount: _pages.length,
+                onPageChanged: (index) {
+                  setState(() => _currentPage = index);
+                },
+                itemBuilder: (context, index) {
+                  final page = _pages[index];
+                  return Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(page.icon, size: 80, color: Theme.of(context).colorScheme.primary),
+                        const SizedBox(height: 20),
+                        Text(
+                          page.title,
+                          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          page.body,
+                          style: const TextStyle(fontSize: 17),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Skip'),
+                  ),
+                  Row(
+                    children: List.generate(
+                      _pages.length,
+                      (index) => Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: index == _currentPage
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: () {
+                      if (isLastPage) {
+                        Navigator.of(context).pop();
+                        return;
+                      }
+                      _pageController.nextPage(
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeInOut,
+                      );
+                    },
+                    child: Text(isLastPage ? 'Finish' : 'Next'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TourPageData {
+  final IconData icon;
+  final String title;
+  final String body;
+
+  const _TourPageData({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
 }
 
 class SStatusCard extends StatelessWidget {
