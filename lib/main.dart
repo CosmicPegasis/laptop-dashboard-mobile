@@ -46,6 +46,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   final List<String> _logs = [];
   final ScrollController _scrollController = ScrollController();
   int _fetchCount = 0;
+  bool _isSleeping = false;
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -191,6 +192,48 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _sleepLaptop() async {
+    setState(() => _isSleeping = true);
+    try {
+      final response = await http.post(Uri.parse('http://$laptopIp:8081/sleep')).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        _addLog('Success: Laptop putting to sleep');
+      } else {
+        _addLog('Error: Could not sleep laptop (${response.statusCode})');
+      }
+    } on TimeoutException {
+      _addLog('Sleep request timed out (it might be sleeping now!)');
+    } catch (e) {
+      _addLog('Sleep failed: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _isSleeping = false);
+    }
+  }
+
+  void _showSleepConfirmation(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sleep Laptop?'),
+        content: const Text('Are you sure you want to put your laptop to sleep? You will lose connection until it wakes up.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _sleepLaptop();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Sleep', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -239,6 +282,24 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                 ),
               ),
               SStatusCard(cpu: cpu, ram: ram, temp: temp, battery: battery, isPlugged: isPlugged),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 60,
+                  child: ElevatedButton.icon(
+                    onPressed: _isSleeping ? null : () => _showSleepConfirmation(context),
+                    icon: _isSleeping 
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.power_settings_new),
+                    label: Text(_isSleeping ? 'Suspending...' : 'Sleep Laptop'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange.shade100,
+                      foregroundColor: Colors.orange.shade900,
+                    ),
+                  ),
+                ),
+              ),
               LogCard(logs: _logs, scrollController: _scrollController),
               const SizedBox(height: 20),
             ],

@@ -25,6 +25,24 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 class StatsHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == '/sleep':
+            try:
+                logger.info("Sleep request received. Putting laptop to sleep...")
+                # Try systemd-suspend first
+                subprocess.run(["systemctl", "suspend"], check=True)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success", "message": "Suspending system"}).encode())
+            except Exception as e:
+                logger.error(f"Error putting system to sleep: {e}")
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_GET(self):
         client_ip = self.client_address[0]
         if self.path == '/stats':
