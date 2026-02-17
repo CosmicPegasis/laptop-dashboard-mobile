@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
 }
 
@@ -38,16 +41,74 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   double cpu = 0.0;
   double ram = 0.0;
   double temp = 0.0;
+  double battery = 0.0;
+  bool isPlugged = false;
   final List<String> _logs = [];
   final ScrollController _scrollController = ScrollController();
   int _fetchCount = 0;
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _loadLaptopIp();
+    _initializeNotifications();
     _startTimer();
     _addLog('Dashboard started');
+  }
+
+  Future<void> _loadLaptopIp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedIp = prefs.getString('laptop_ip') ?? 'localhost';
+    setState(() {
+      laptopIp = savedIp;
+      _ipController.text = savedIp;
+    });
+    _addLog('Loaded IP: $savedIp');
+  }
+
+  Future<void> _saveLaptopIp(String ip) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('laptop_ip', ip);
+  }
+
+  Future<void> _initializeNotifications() async {
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+  }
+
+  Future<void> _showPersistentNotification() async {
+    final String plugStatus = isPlugged ? 'Charging' : 'Discharging';
+    final AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'laptop_stats_channel',
+      'Laptop Stats',
+      channelDescription: 'Persistent notification for laptop statistics',
+      importance: Importance.low,
+      priority: Priority.low,
+      ongoing: true,
+      autoCancel: false,
+      showWhen: false,
+      onlyAlertOnce: true,
+      styleInformation: BigTextStyleInformation(
+        'CPU: ${cpu.toStringAsFixed(1)}% | RAM: ${ram.toStringAsFixed(1)}%\n'
+        'Temp: ${temp.toStringAsFixed(1)}°C | Battery: ${battery.toStringAsFixed(0)}% ($plugStatus)',
+      ),
+    );
+    final NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+    await flutterLocalNotificationsPlugin.show(
+      0,
+      'Laptop Status: ${battery.toStringAsFixed(0)}% ($plugStatus)',
+      'CPU: ${cpu.toStringAsFixed(1)}% | RAM: ${ram.toStringAsFixed(1)}%',
+      platformChannelSpecifics,
+    );
   }
 
   @override
@@ -56,7 +117,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _startTimer();
     } else if (state == AppLifecycleState.paused) {
-      _timer?.cancel();
+      // Keep timer running in background if we want persistent updates
+      // _timer?.cancel(); 
     }
   }
 
@@ -91,18 +153,28 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       final response = await http.get(Uri.parse('http://$laptopIp:8081/stats')).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final newCpu = (data['cpu_usage'] as num).toDouble();
-        final newRam = (data['ram_usage'] as num).toDouble();
-        final newTemp = (data['cpu_temp'] as num).toDouble();
+        final newCpu = (data['cpu_usage'] ?? 0.0) as num;
+        final newRam = (data['ram_usage'] ?? 0.0) as num;
+        final newTemp = (data['cpu_temp'] ?? 0.0) as num;
+        final newBattery = (data['battery_percent'] ?? 0.0) as num;
+        final newPlugged = (data['is_plugged'] ?? false) as bool;
         
-        bool valuesChanged = newCpu != cpu || newRam != ram || newTemp != temp;
+        bool valuesChanged = newCpu.toDouble() != cpu || 
+                            newRam.toDouble() != ram || 
+                            newTemp.toDouble() != temp || 
+                            newBattery.toDouble() != battery || 
+                            newPlugged != isPlugged;
         
         setState(() {
-          cpu = newCpu;
-          ram = newRam;
-          temp = newTemp;
+          cpu = newCpu.toDouble();
+          ram = newRam.toDouble();
+          temp = newTemp.toDouble();
+          battery = newBattery.toDouble();
+          isPlugged = newPlugged;
         });
         
+        _showPersistentNotification();
+
         _fetchCount++;
         if (valuesChanged || _fetchCount % 5 == 0) {
           String reason = valuesChanged ? 'values changed' : 'periodic sync';
@@ -160,12 +232,13 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                       setState(() {
                         laptopIp = newIp;
                       });
+                      _saveLaptopIp(newIp);
                       _addLog('IP changed to $laptopIp');
                     }
                   },
                 ),
               ),
-              SStatusCard(cpu: cpu, ram: ram, temp: temp),
+              SStatusCard(cpu: cpu, ram: ram, temp: temp, battery: battery, isPlugged: isPlugged),
               LogCard(logs: _logs, scrollController: _scrollController),
               const SizedBox(height: 20),
             ],
@@ -180,16 +253,21 @@ class SStatusCard extends StatelessWidget {
   final double cpu;
   final double ram;
   final double temp;
+  final double battery;
+  final bool isPlugged;
 
   const SStatusCard({
     super.key,
     required this.cpu,
     required this.ram,
     required this.temp,
+    required this.battery,
+    required this.isPlugged,
   });
 
   @override
   Widget build(BuildContext context) {
+    final String plugStatus = isPlugged ? ' (Charging)' : '';
     return Card(
       elevation: 4,
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -207,6 +285,8 @@ class SStatusCard extends StatelessWidget {
             _StatusRow(label: 'RAM', value: '${ram.toStringAsFixed(1)}%'),
             const SizedBox(height: 8),
             _StatusRow(label: 'Temp', value: '${temp.toStringAsFixed(1)}°C'),
+            const SizedBox(height: 8),
+            _StatusRow(label: 'Battery', value: '${battery.toStringAsFixed(0)}%$plugStatus'),
           ],
         ),
       ),

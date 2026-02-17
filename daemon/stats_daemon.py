@@ -53,10 +53,37 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.error(f"Error collecting temperature stats: {e}")
                 
+                # Battery Info
+                battery_percent = 0
+                is_plugged = False
+                try:
+                    # Try psutil first
+                    battery = psutil.sensors_battery()
+                    if battery:
+                        battery_percent = battery.percent
+                        is_plugged = battery.power_plugged
+                    else:
+                        # Fallback to upower for systems where psutil fails (e.g. certain kernels/setups)
+                        import subprocess
+                        # List devices to find the battery (usually BAT0 or CMB0)
+                        devices = subprocess.check_output(["upower", "-e"], text=True).splitlines()
+                        battery_path = next((d for d in devices if "battery" in d), None)
+                        if battery_path:
+                            info = subprocess.check_output(["upower", "-i", battery_path], text=True)
+                            for line in info.splitlines():
+                                if "percentage:" in line:
+                                    battery_percent = float(line.split(":")[1].replace("%", "").strip())
+                                if "state:" in line:
+                                    is_plugged = "charging" in line.lower() or "fully-charged" in line.lower()
+                except Exception as e:
+                    logger.error(f"Error collecting battery stats: {e}")
+
                 stats = {
                     "cpu_usage": cpu_usage,
                     "ram_usage": ram_usage,
                     "cpu_temp": temp,
+                    "battery_percent": battery_percent,
+                    "is_plugged": is_plugged,
                     "timestamp": time.time()
                 }
 
