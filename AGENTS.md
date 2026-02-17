@@ -16,6 +16,8 @@ Flutter-based mobile app and Python daemon for monitoring laptop statistics and 
 - **Persistent Notifications**: Displays live laptop statistics in the Android status bar.
 - **Remote Sleep**: Put the laptop to sleep directly from the mobile app via `systemctl suspend`.
 - **IP Persistence**: Remembers the laptop's IP address across app launches.
+- **Phone Notification Sync**: Forwards Android notifications to the laptop for desktop popups (Reverse Sync).
+- **Custom Polling**: Configurable refresh interval for battery and performance stats (1s to 30s).
 - **Welcome Tour**: A walkthrough for first-time users.
 - **Settings Menu**: Sidebar (Drawer) navigation to separate Dashboard and Settings.
 
@@ -24,11 +26,17 @@ Flutter-based mobile app and Python daemon for monitoring laptop statistics and 
 - **Frontend**: Flutter (Dart)
   - `http`: For daemon API requests.
   - `flutter_local_notifications`: For persistent status bar updates.
-  - `shared_preferences`: For persisting IP and onboarding state.
-- **Backend**: Python 3
+  - `shared_preferences`: For persisting IP, onboarding state, and preferences.
+  - `permission_handler`: For managing notification and system permissions.
+- **Native Android (Kotlin)**:
+  - `MethodChannel`: For checking notification access and opening system settings.
+  - `EventChannel`: For streaming live notifications to the Dart side.
+  - `NotificationListenerService`: For intercepting system notifications.
+- **Backend (Laptop)**: Python 3
   - `psutil`: For system statistics.
   - `upower`: Fallback for battery statistics on certain Linux setups.
-  - `http.server`: Minimal API server.
+  - `http.server`: Minimal API server handling `/stats`, `/sleep`, and `/phone-notification`.
+  - `notify-send`: For displaying mirrored notifications on the laptop.
 
 ## Build & Run
 

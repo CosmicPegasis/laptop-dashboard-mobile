@@ -38,13 +38,15 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
-  static const int _persistentNotificationId = 0;
   static const int _offlineNotificationId = 1;
   static const EventChannel _phoneNotificationEventChannel = EventChannel(
     'laptop_dashboard_mobile/notification_events',
   );
   static const MethodChannel _phoneNotificationMethodChannel = MethodChannel(
     'laptop_dashboard_mobile/notification_sync_control',
+  );
+  static const MethodChannel _statsUpdateChannel = MethodChannel(
+    'laptop_dashboard_mobile/stats_update',
   );
 
   String laptopIp = 'localhost';
@@ -390,7 +392,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     });
 
     if (status && !_offlineNotificationShown) {
-      await _showPersistentNotification();
+      await _updateForegroundServiceNotification();
     }
   }
 
@@ -429,7 +431,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     if (isGranted) {
       _addLog('Notifications permission granted');
       if (!_offlineNotificationShown) {
-        await _showPersistentNotification();
+        await _updateForegroundServiceNotification();
       }
       return;
     }
@@ -451,34 +453,19 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     await openAppSettings();
   }
 
-  Future<void> _showPersistentNotification() async {
-    if (!await _resolveNotificationPermissionStatus()) return;
-    final String plugStatus = isPlugged ? 'Charging' : 'Discharging';
-    final AndroidNotificationDetails
-    androidPlatformChannelSpecifics = AndroidNotificationDetails(
-      'laptop_stats_channel',
-      'Laptop Stats',
-      channelDescription: 'Persistent notification for laptop statistics',
-      importance: Importance.low,
-      priority: Priority.low,
-      ongoing: true,
-      autoCancel: false,
-      showWhen: false,
-      onlyAlertOnce: true,
-      styleInformation: BigTextStyleInformation(
-        'CPU: ${cpu.toStringAsFixed(1)}% | RAM: ${ram.toStringAsFixed(1)}%\n'
-        'Temp: ${temp.toStringAsFixed(1)}°C | Battery: ${battery.toStringAsFixed(0)}% ($plugStatus)',
-      ),
-    );
-    final NotificationDetails platformChannelSpecifics = NotificationDetails(
-      android: androidPlatformChannelSpecifics,
-    );
-    await _showNotificationSafely(
-      _persistentNotificationId,
-      'Laptop Status: ${battery.toStringAsFixed(0)}% ($plugStatus)',
-      'CPU: ${cpu.toStringAsFixed(1)}% | RAM: ${ram.toStringAsFixed(1)}%',
-      platformChannelSpecifics,
-    );
+  Future<void> _updateForegroundServiceNotification() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _statsUpdateChannel.invokeMethod('updateStats', {
+        'cpu': cpu,
+        'ram': ram,
+        'temp': temp,
+        'battery': battery,
+        'isPlugged': isPlugged,
+      });
+    } catch (e) {
+      debugPrint('Failed to update foreground notification: $e');
+    }
   }
 
   Future<void> _showOfflineNotification() async {
@@ -630,7 +617,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         });
 
         await _markOnline();
-        await _showPersistentNotification();
+        await _updateForegroundServiceNotification();
 
         _fetchCount++;
         if (valuesChanged || _fetchCount % 5 == 0) {

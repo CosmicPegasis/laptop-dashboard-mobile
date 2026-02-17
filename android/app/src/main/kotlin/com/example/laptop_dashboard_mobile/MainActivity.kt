@@ -15,6 +15,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         const val EVENT_CHANNEL = "laptop_dashboard_mobile/notification_events"
         const val METHOD_CHANNEL = "laptop_dashboard_mobile/notification_sync_control"
+        const val STATS_CHANNEL = "laptop_dashboard_mobile/stats_update"
         private const val TAG = "MainActivity"
     }
 
@@ -54,6 +55,23 @@ class MainActivity : FlutterActivity() {
 
                 "openNotificationAccessSettings" -> {
                     startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    result.success(true)
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, STATS_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "updateStats" -> {
+                    val cpu = call.argument<Double>("cpu") ?: 0.0
+                    val ram = call.argument<Double>("ram") ?: 0.0
+                    val temp = call.argument<Double>("temp") ?: 0.0
+                    val battery = call.argument<Double>("battery") ?: 0.0
+                    val isPlugged = call.argument<Boolean>("isPlugged") ?: false
+                    
+                    NotificationSyncBridge.updateStats(cpu, ram, temp, battery, isPlugged)
                     result.success(true)
                 }
 
