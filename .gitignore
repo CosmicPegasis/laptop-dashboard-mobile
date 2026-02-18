@@ -40,5 +40,16 @@ build/
 # Mac
 .DS_Store
 
-# Daemon logs
+# Daemon
+## Logs
 daemon/stats_daemon.log
+daemon/go/stats_daemon.log
+## Python cache
+daemon/__pycache__/
+daemon/.pytest_cache/
+daemon/.benchmarks/
+## Go binary
+daemon/go/daemon
+
+# Planning / design docs (local only)
+planning/
