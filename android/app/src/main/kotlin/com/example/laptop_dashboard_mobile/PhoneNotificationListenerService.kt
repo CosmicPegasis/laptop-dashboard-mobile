@@ -3,8 +3,10 @@ package com.example.laptop_dashboard_mobile
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
@@ -77,6 +79,16 @@ class PhoneNotificationListenerService : NotificationListenerService() {
         val contentTitle = "Laptop: ${NotificationSyncBridge.battery.toInt()}% ($plugStatus)"
         val contentText = "CPU: ${NotificationSyncBridge.cpu.toInt()}% | RAM: ${NotificationSyncBridge.ram.toInt()}% | ${NotificationSyncBridge.temp.toInt()}°C"
 
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = PendingIntent.getActivity(this, 0, launchIntent, pendingIntentFlags)
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(contentTitle)
             .setContentText(contentText)
@@ -84,6 +96,7 @@ class PhoneNotificationListenerService : NotificationListenerService() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setShowWhen(false)
+            .setContentIntent(pendingIntent)
             .setStyle(
                 NotificationCompat.BigTextStyle()
                     .bigText(
