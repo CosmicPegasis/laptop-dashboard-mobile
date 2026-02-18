@@ -39,3 +39,6 @@ build/
 
 # Mac
 .DS_Store
+
+# Daemon logs
+daemon/stats_daemon.log

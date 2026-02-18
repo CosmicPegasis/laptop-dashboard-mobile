@@ -77,7 +77,10 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   bool _reverseSyncPermissionGranted = false;
   bool _reverseSyncPermissionChecked = false;
   StreamSubscription<dynamic>? _phoneNotificationSubscription;
-  String _lastForwardedNotificationKey = '';
+  final Set<String> _forwardedNotificationKeys = {};
+  static const int _maxForwardedKeys = 100;
+  final Map<String, int> _forwardedContentTimestamps = {};
+  static const int _dedupWindowSeconds = 5;
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -297,6 +300,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     if (event is! Map) return;
 
     final map = Map<String, dynamic>.from(event);
+    final key = map['key']?.toString() ?? '';
     final packageName = map['package_name']?.toString() ?? 'unknown_app';
     final title = map['title']?.toString() ?? '';
     final text = map['text']?.toString() ?? '';
@@ -306,9 +310,25 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     if (title.isEmpty && text.isEmpty) return;
     if (isOngoing) return;
 
-    final key = '$packageName|$title|$text|$postedAt';
-    if (key == _lastForwardedNotificationKey) return;
-    _lastForwardedNotificationKey = key;
+    if (key.isNotEmpty && _forwardedNotificationKeys.contains(key)) return;
+
+    final contentKey = '$title|$text';
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final lastForwarded = _forwardedContentTimestamps[contentKey];
+    if (lastForwarded != null && (now - lastForwarded) < _dedupWindowSeconds) {
+      return;
+    }
+
+    if (key.isNotEmpty) {
+      _forwardedNotificationKeys.add(key);
+      if (_forwardedNotificationKeys.length > _maxForwardedKeys) {
+        _forwardedNotificationKeys.remove(_forwardedNotificationKeys.first);
+      }
+    }
+    _forwardedContentTimestamps[contentKey] = now;
+    _forwardedContentTimestamps.removeWhere(
+      (_, timestamp) => (now - timestamp) > _dedupWindowSeconds,
+    );
 
     final payload = <String, dynamic>{
       'package_name': packageName,

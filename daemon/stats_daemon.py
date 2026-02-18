@@ -125,15 +125,13 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 battery_percent = 0
                 is_plugged = False
                 try:
-                    # Try psutil first
                     battery = psutil.sensors_battery()
                     if battery:
                         battery_percent = battery.percent
                         is_plugged = battery.power_plugged
+                        logger.debug(f"psutil battery: percent={battery_percent}, power_plugged={is_plugged}")
                     else:
-                        # Fallback to upower for systems where psutil fails (e.g. certain kernels/setups)
                         import subprocess
-                        # List devices to find the battery (usually BAT0 or CMB0)
                         devices = subprocess.check_output(["upower", "-e"], text=True).splitlines()
                         battery_path = next((d for d in devices if "battery" in d), None)
                         if battery_path:
@@ -142,7 +140,9 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                                 if "percentage:" in line:
                                     battery_percent = float(line.split(":")[1].replace("%", "").strip())
                                 if "state:" in line:
-                                    is_plugged = "charging" in line.lower() or "fully-charged" in line.lower()
+                                    state_value = line.split(":")[1].strip().lower()
+                                    is_plugged = state_value in ("charging", "fully-charged")
+                            logger.debug(f"upower battery: percent={battery_percent}, is_plugged={is_plugged}")
                 except Exception as e:
                     logger.error(f"Error collecting battery stats: {e}")
 

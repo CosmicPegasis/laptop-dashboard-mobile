@@ -126,6 +126,7 @@ class PhoneNotificationListenerService : NotificationListenerService() {
         val message = if (bigText.isNotEmpty()) bigText else text
 
         val payload = hashMapOf<String, Any>(
+            "key" to sbn.key,
             "package_name" to sbn.packageName,
             "title" to title,
             "text" to message,
