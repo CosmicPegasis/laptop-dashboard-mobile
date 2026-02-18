@@ -1,20 +1,23 @@
 // stats_daemon — Go rewrite of the Python stats_daemon.py
-// Serves on port 8081 with three endpoints:
+// Serves on port 8081 with four endpoints:
 //
 //	GET  /stats               — system statistics JSON
 //	POST /sleep               — suspend the laptop
 //	POST /phone-notification  — forward a phone notification via notify-send
+//	POST /upload              — receive a file from the phone
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,6 +39,10 @@ const (
 	maxBackups = 5
 	port       = "8081"
 )
+
+// uploadDir is the directory (relative to $HOME) where uploaded files are saved.
+// Declared as a var so tests can override it with t.TempDir().
+var uploadDir = filepath.Join(os.Getenv("HOME"), "Downloads", "phone_transfers")
 
 func setupLogging() {
 	rotatingFile := &lumberjack.Logger{
@@ -305,6 +312,80 @@ func handlePhoneNotification(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /upload
+// ---------------------------------------------------------------------------
+
+// ensureUploadDir creates the upload directory if it does not already exist.
+func ensureUploadDir() error {
+	return os.MkdirAll(uploadDir, 0o755)
+}
+
+// safePath joins dir and filename, cleans the result, and verifies it is still
+// inside dir. Returns an error if the path would escape the directory.
+func safePath(dir, filename string) (string, error) {
+	// filepath.Base strips any directory components from the client-supplied name.
+	base := filepath.Base(filename)
+	if base == "." || base == string(filepath.Separator) {
+		return "", fmt.Errorf("invalid filename")
+	}
+	dest := filepath.Clean(filepath.Join(dir, base))
+	// Ensure the resolved path is still inside dir.
+	if !strings.HasPrefix(dest, filepath.Clean(dir)+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes upload directory")
+	}
+	return dest, nil
+}
+
+func handleUpload(w http.ResponseWriter, r *http.Request) {
+	// 32 MB in-memory threshold; larger files spill to OS temp automatically.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		errorJSON(w, http.StatusBadRequest, "failed to parse multipart form")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, "missing 'file' field")
+		return
+	}
+	defer file.Close()
+
+	dest, err := safePath(uploadDir, header.Filename)
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid filename")
+		return
+	}
+
+	out, err := os.Create(dest)
+	if err != nil {
+		slog.Error("Failed to create upload file", "dest", dest, "err", err)
+		errorJSON(w, http.StatusInternalServerError, "could not create destination file")
+		return
+	}
+	defer out.Close()
+
+	if _, err = io.Copy(out, file); err != nil {
+		slog.Error("Failed to write upload file", "dest", dest, "err", err)
+		errorJSON(w, http.StatusInternalServerError, "failed to write file")
+		return
+	}
+
+	slog.Info("File received from phone", "filename", header.Filename, "dest", dest)
+
+	// Fire a desktop notification (mirrors handlePhoneNotification pattern).
+	if notifySend, err := exec.LookPath("notify-send"); err == nil {
+		cmd := exec.Command(notifySend, "--app-name=Phone Sync",
+			"File received", truncate(header.Filename, 200))
+		_ = cmd.Run()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "success",
+		"filename": header.Filename,
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -335,6 +416,14 @@ func newMux() *http.ServeMux {
 		handlePhoneNotification(w, r)
 	})
 
+	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		handleUpload(w, r)
+	})
+
 	// Catch-all 404
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("Path not found", "path", r.URL.Path, "method", r.Method)
@@ -350,6 +439,12 @@ func newMux() *http.ServeMux {
 
 func main() {
 	setupLogging()
+
+	// Ensure the upload directory exists before accepting requests.
+	if err := ensureUploadDir(); err != nil {
+		slog.Error("Failed to create upload directory", "dir", uploadDir, "err", err)
+		os.Exit(1)
+	}
 
 	// Warm up CPU counter (mirrors psutil.cpu_percent(interval=None) at startup)
 	_, _ = cpu.Percent(0, false)

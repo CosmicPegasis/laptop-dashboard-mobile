@@ -8,6 +8,8 @@ import 'package:intl/intl.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:dio/dio.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -81,6 +83,13 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   static const int _maxForwardedKeys = 100;
   final Map<String, int> _forwardedContentTimestamps = {};
   static const int _dedupWindowSeconds = 5;
+
+  // File transfer state
+  bool _isUploading = false;
+  double _uploadProgress = 0.0;
+  String? _uploadStatusMessage;
+  String? _pickedFileName;
+  bool _uploadSuccess = false;
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -574,6 +583,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   void _addLog(String message) {
     if (!mounted) return;
     final timestamp = DateFormat('HH:mm:ss').format(DateTime.now());
+    debugPrint('[$timestamp] $message');
     setState(() {
       _logs.add('[$timestamp] $message');
       if (_logs.length > 100) _logs.removeAt(0);
@@ -737,6 +747,90 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     return granted;
   }
 
+  Future<void> _pickAndUploadFile() async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    final filePath = file.path;
+    if (filePath == null) {
+      if (!mounted) return;
+      setState(() {
+        _uploadStatusMessage = 'Could not access file path.';
+        _uploadSuccess = false;
+      });
+      return;
+    }
+
+    final fileName = file.name;
+    if (!mounted) return;
+    setState(() {
+      _pickedFileName = fileName;
+      _isUploading = true;
+      _uploadProgress = 0.0;
+      _uploadStatusMessage = null;
+      _uploadSuccess = false;
+    });
+    _addLog('Uploading: $fileName');
+
+    try {
+      final dio = Dio();
+      final formData = FormData.fromMap({
+        'file': await MultipartFile.fromFile(filePath, filename: fileName),
+      });
+
+      final response = await dio.post(
+        'http://$laptopIp:8081/upload',
+        data: formData,
+        onSendProgress: (sent, total) {
+          if (total <= 0) return;
+          if (!mounted) return;
+          setState(() {
+            _uploadProgress = sent / total;
+          });
+        },
+        options: Options(
+          sendTimeout: const Duration(minutes: 5),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
+      );
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        setState(() {
+          _uploadProgress = 1.0;
+          _uploadStatusMessage = 'Upload successful!';
+          _uploadSuccess = true;
+        });
+        _addLog('Uploaded: $fileName');
+      } else {
+        setState(() {
+          _uploadStatusMessage = 'Upload failed (HTTP ${response.statusCode})';
+          _uploadSuccess = false;
+        });
+        _addLog('Upload failed (${response.statusCode}): $fileName');
+      }
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final msg = e.message ?? e.toString().split('\n').first;
+      setState(() {
+        _uploadStatusMessage = 'Upload error: $msg';
+        _uploadSuccess = false;
+      });
+      _addLog('Upload error: $msg');
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().split('\n').first;
+      setState(() {
+        _uploadStatusMessage = 'Upload error: $msg';
+        _uploadSuccess = false;
+      });
+      _addLog('Upload error: $msg');
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
+    }
+  }
+
   Future<void> _sleepLaptop() async {
     setState(() => _isSleeping = true);
     try {
@@ -793,12 +887,20 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
-    final isSettingsPage = _selectedDrawerIndex == 1;
+    String appBarTitle;
+    if (_selectedDrawerIndex == 1) {
+      appBarTitle = 'File Transfer';
+    } else if (_selectedDrawerIndex == 2) {
+      appBarTitle = 'Settings';
+    } else {
+      appBarTitle = 'Laptop Dashboard';
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(isSettingsPage ? 'Settings' : 'Laptop Dashboard'),
+        title: Text(appBarTitle),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       drawer: Drawer(
@@ -827,20 +929,31 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.settings),
-              title: const Text('Settings'),
+              leading: const Icon(Icons.upload_file),
+              title: const Text('File Transfer'),
               selected: _selectedDrawerIndex == 1,
               onTap: () {
                 setState(() => _selectedDrawerIndex = 1);
                 Navigator.pop(context);
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.settings),
+              title: const Text('Settings'),
+              selected: _selectedDrawerIndex == 2,
+              onTap: () {
+                setState(() => _selectedDrawerIndex = 2);
+                Navigator.pop(context);
+              },
+            ),
           ],
         ),
       ),
-      body: isSettingsPage
-          ? _buildSettingsPage()
-          : _buildDashboardPage(context),
+      body: switch (_selectedDrawerIndex) {
+        1 => _buildFileTransferPage(),
+        2 => _buildSettingsPage(),
+        _ => _buildDashboardPage(context),
+      },
     );
   }
 
@@ -891,6 +1004,95 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
             ),
             LogCard(logs: _logs, scrollController: _scrollController),
             const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFileTransferPage() {
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Send File to Laptop',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Uploads to ~/Downloads/phone_transfers/ on $laptopIp.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              height: 56,
+              child: ElevatedButton.icon(
+                onPressed: _isUploading ? null : _pickAndUploadFile,
+                icon: _isUploading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.upload_file),
+                label: Text(_isUploading ? 'Uploading...' : 'Pick & Upload File'),
+              ),
+            ),
+            if (_pickedFileName != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.insert_drive_file, size: 16),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _pickedFileName!,
+                      style: const TextStyle(fontWeight: FontWeight.w500),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (_isUploading || (_uploadProgress > 0 && _uploadProgress < 1)) ...[
+              const SizedBox(height: 16),
+              LinearProgressIndicator(
+                value: _isUploading ? _uploadProgress : null,
+                minHeight: 6,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${(_uploadProgress * 100).toStringAsFixed(0)}%',
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.end,
+              ),
+            ],
+            if (_uploadStatusMessage != null) ...[
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Icon(
+                    _uploadSuccess ? Icons.check_circle : Icons.error,
+                    color: _uploadSuccess ? Colors.green : Colors.red,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _uploadStatusMessage!,
+                      style: TextStyle(
+                        color: _uploadSuccess ? Colors.green.shade700 : Colors.red.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),

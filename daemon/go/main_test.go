@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -505,5 +506,135 @@ func TestConcurrency_StatsAndNotificationConcurrent(t *testing.T) {
 	}
 	if s := <-notifDone; s != 200 {
 		t.Errorf("notification: want 200, got %d", s)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// POST /upload
+// ---------------------------------------------------------------------------
+
+// postMultipart sends a multipart/form-data POST with a single "file" field.
+// content is the file body; filename is the client-supplied name.
+func postMultipart(t *testing.T, base, path, filename string, content []byte) (int, map[string]any) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err = fw.Write(content); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	mw.Close()
+
+	resp, err := http.Post(base+path, mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, decodeBody(t, resp.Body)
+}
+
+func TestUpload_ValidFile_Returns200(t *testing.T) {
+	// Override uploadDir so the test writes to a temp directory.
+	orig := uploadDir
+	uploadDir = t.TempDir()
+	t.Cleanup(func() { uploadDir = orig })
+
+	base := startServer(t)
+	status, body := postMultipart(t, base, "/upload", "hello.txt", []byte("hello world"))
+	if status != 200 {
+		t.Errorf("want 200, got %d", status)
+	}
+	if body["status"] != "success" {
+		t.Errorf("want status=success, got %v", body["status"])
+	}
+}
+
+func TestUpload_ResponseHasFilename(t *testing.T) {
+	orig := uploadDir
+	uploadDir = t.TempDir()
+	t.Cleanup(func() { uploadDir = orig })
+
+	base := startServer(t)
+	_, body := postMultipart(t, base, "/upload", "report.pdf", []byte("%PDF"))
+	if body["filename"] != "report.pdf" {
+		t.Errorf("want filename=report.pdf, got %v", body["filename"])
+	}
+}
+
+func TestUpload_MissingFileField_Returns400(t *testing.T) {
+	base := startServer(t)
+	// Send a multipart body with a different field name — "file" is absent.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormField("not_a_file")
+	_, _ = fw.Write([]byte("data"))
+	mw.Close()
+
+	resp, err := http.Post(base+"/upload", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatalf("POST /upload: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestUpload_GetUpload_Returns404(t *testing.T) {
+	base := startServer(t)
+	status, _ := get(t, base, "/upload")
+	if status != 404 {
+		t.Errorf("want 404 for GET /upload, got %d", status)
+	}
+}
+
+func TestUpload_DirectoryTraversal_IsSanitised(t *testing.T) {
+	// filepath.Base strips all path components from the client-supplied name,
+	// so "../../etc/passwd" is saved as "passwd" inside the upload dir — not
+	// rejected, but safely neutralised.
+	orig := uploadDir
+	uploadDir = t.TempDir()
+	t.Cleanup(func() { uploadDir = orig })
+
+	base := startServer(t)
+	status, body := postMultipart(t, base, "/upload", "../../etc/passwd", []byte("evil"))
+	if status != 200 {
+		t.Errorf("want 200 (traversal sanitised by filepath.Base), got %d", status)
+	}
+	// The filename in the response must be the original client name, but the
+	// file on disk must be inside the upload dir (verified by the handler).
+	if body["status"] != "success" {
+		t.Errorf("want status=success, got %v", body["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// safePath unit tests
+// ---------------------------------------------------------------------------
+
+func TestSafePath_NormalFilename(t *testing.T) {
+	dir := t.TempDir()
+	got, err := safePath(dir, "photo.jpg")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(got, dir) {
+		t.Errorf("path %q is not inside dir %q", got, dir)
+	}
+}
+
+func TestSafePath_TraversalFilename_IsSanitised(t *testing.T) {
+	// filepath.Base strips the traversal components; the result must still be
+	// inside the upload dir.
+	dir := t.TempDir()
+	got, err := safePath(dir, "../../etc/passwd")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(got, dir) {
+		t.Errorf("sanitised path %q escaped dir %q", got, dir)
 	}
 }
