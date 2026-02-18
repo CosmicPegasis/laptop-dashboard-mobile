@@ -15,7 +15,7 @@ class LogCard extends StatelessWidget {
     return Card(
       elevation: 8,
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      color: const Color(0xFF1E1E1E),
+      color: const Color(0xFF1E1E1E), // Dark background
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
         height: 250,
@@ -69,7 +69,7 @@ class LogCard extends StatelessWidget {
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 11,
-                          color: Color(0xFFD4D4D4),
+                          color: Color(0xFFD4D4D4), // Light grey text
                         ),
                       ),
                     );
