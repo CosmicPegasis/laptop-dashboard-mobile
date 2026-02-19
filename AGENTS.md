@@ -59,3 +59,13 @@ flutter build apk --release
 
 - **Daemon Logs**: Located at `daemon/stats_daemon.log`.
 - **Git Repository**: [https://github.com/CosmicPegasis/laptop-dashboard-mobile](https://github.com/CosmicPegasis/laptop-dashboard-mobile)
+
+## How To Contribute
+
+Always write tests For all new features.
+Delete tests for redundant or deprecated features.
+
+
+# How to Write Git Commits
+
+Break down the diffs into smaller logically related commits when committing code.

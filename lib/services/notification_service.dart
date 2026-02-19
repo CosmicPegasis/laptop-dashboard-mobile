@@ -1,26 +1,54 @@
 import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class NotificationService {
-  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
   static const MethodChannel _statsUpdateChannel = MethodChannel(
     'laptop_dashboard_mobile/stats_update',
   );
 
   bool _initialized = false;
+  Function(String?)? _onNotificationTap;
+  Function(String)? _onNotificationAction;
 
-  Future<void> initialize() async {
+  Future<void> initialize({
+    Function(String?)? onNotificationTap,
+    Function(String)? onNotificationAction,
+  }) async {
     if (_initialized) return;
+
+    _onNotificationTap = onNotificationTap;
+    _onNotificationAction = onNotificationAction;
 
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
-    const InitializationSettings initializationSettings =
+
+    final InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
 
-    await _plugin.initialize(initializationSettings);
+    await _plugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: _handleNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse: _notificationTapBackground,
+    );
     _initialized = true;
+  }
+
+  void _handleNotificationResponse(NotificationResponse response) {
+    if (response.actionId == 'download') {
+      _onNotificationAction?.call('download');
+    } else {
+      _onNotificationTap?.call(response.payload);
+    }
+  }
+
+  @pragma('vm:entry-point')
+  static void _notificationTapBackground(NotificationResponse response) {
+    // Handle in main isolate via notification response
   }
 
   Future<bool> checkAndRequestPermission() async {
@@ -36,8 +64,10 @@ class NotificationService {
     if (!(Platform.isAndroid || Platform.isIOS)) return true;
 
     if (Platform.isAndroid) {
-      final androidImplementation = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
+      final androidImplementation = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       if (androidImplementation != null) {
         return await androidImplementation.areNotificationsEnabled() ?? false;
       }
@@ -50,15 +80,15 @@ class NotificationService {
   Future<void> showOfflineNotification(int id, String laptopIp) async {
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      'laptop_offline_channel',
-      'Laptop Offline',
-      channelDescription: 'Notification when laptop connection is offline',
-      importance: Importance.high,
-      priority: Priority.high,
-      ongoing: false,
-      autoCancel: true,
-      onlyAlertOnce: true,
-    );
+          'laptop_offline_channel',
+          'Laptop Offline',
+          channelDescription: 'Notification when laptop connection is offline',
+          importance: Importance.high,
+          priority: Priority.high,
+          ongoing: false,
+          autoCancel: true,
+          onlyAlertOnce: true,
+        );
     const NotificationDetails platformChannelSpecifics = NotificationDetails(
       android: androidPlatformChannelSpecifics,
     );
@@ -94,5 +124,60 @@ class NotificationService {
     } catch (e) {
       // Log error or handle silently as in original code
     }
+  }
+
+  static const int _newFileNotificationBaseId = 100;
+
+  Future<void> showNewFileNotification({
+    required String filename,
+    required int newFileCount,
+    required VoidCallback onDownload,
+  }) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+          'file_download_channel',
+          'File Downloads',
+          channelDescription:
+              'Notifications for new files available from laptop',
+          importance: Importance.high,
+          priority: Priority.high,
+          ongoing: false,
+          autoCancel: true,
+          onlyAlertOnce: false,
+          icon: '@mipmap/ic_launcher',
+          actions: <AndroidNotificationAction>[
+            AndroidNotificationAction(
+              'download',
+              'Download',
+              showsUserInterface: true,
+            ),
+            AndroidNotificationAction(
+              'dismiss',
+              'Dismiss',
+              cancelNotification: true,
+            ),
+          ],
+        );
+
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+    );
+
+    final title = newFileCount == 1
+        ? 'New File Available'
+        : '$newFileCount New Files Available';
+    final body = newFileCount == 1 ? filename : 'Tap to view files on laptop';
+
+    await _plugin.show(
+      _newFileNotificationBaseId,
+      title,
+      body,
+      platformChannelSpecifics,
+      payload: 'file_transfer',
+    );
+  }
+
+  Future<void> cancelNewFileNotification() async {
+    await _plugin.cancel(_newFileNotificationBaseId);
   }
 }

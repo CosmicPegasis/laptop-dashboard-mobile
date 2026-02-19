@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import '../models/app_stats.dart';
+import '../models/file_info.dart';
 
 class ApiService {
   final String laptopIp;
@@ -45,21 +46,38 @@ class ApiService {
       'file': await MultipartFile.fromFile(filePath, filename: fileName),
     });
 
-    final response = await _dio.post(
-      'http://$laptopIp:8081/upload',
-      data: formData,
-      onSendProgress: (sent, total) {
-        if (total <= 0) return;
-        onProgress(sent / total);
-      },
-      options: Options(
-        sendTimeout: const Duration(minutes: 5),
-        receiveTimeout: const Duration(seconds: 10),
-      ),
-    );
+    try {
+      final response = await _dio.post(
+        'http://$laptopIp:8081/upload',
+        data: formData,
+        onSendProgress: (sent, total) {
+          if (total <= 0) return;
+          onProgress(sent / total);
+        },
+        options: Options(
+          sendTimeout: const Duration(minutes: 5),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
+      );
 
-    if (response.statusCode != 200) {
-      throw Exception('Upload failed (HTTP ${response.statusCode})');
+      if (response.statusCode != 200) {
+        throw Exception('Upload failed (HTTP ${response.statusCode})');
+      }
+    } on DioException catch (e) {
+      final message = switch (e.type) {
+        DioExceptionType.connectionTimeout =>
+          'Connection timeout - check if laptop is reachable',
+        DioExceptionType.sendTimeout =>
+          'Upload timed out - file may be too large',
+        DioExceptionType.receiveTimeout => 'Server response timeout',
+        DioExceptionType.badResponse =>
+          'Server error (HTTP ${e.response?.statusCode ?? 'unknown'})',
+        DioExceptionType.connectionError =>
+          'Connection error - check IP address and network',
+        DioExceptionType.cancel => 'Upload was cancelled',
+        _ => 'Upload failed: ${e.message ?? 'unknown error'}',
+      };
+      throw Exception(message);
     }
   }
 
@@ -74,6 +92,57 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw Exception('Reverse sync failed (HTTP ${response.statusCode})');
+    }
+  }
+
+  Future<List<FileInfo>> listFiles() async {
+    final response = await http
+        .get(Uri.parse('http://$laptopIp:8081/list-files'))
+        .timeout(const Duration(seconds: 5));
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(response.body);
+      if (decoded is! List) {
+        throw Exception('Invalid file list payload: expected JSON array');
+      }
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map((item) => FileInfo.fromJson(item))
+          .toList();
+    } else {
+      throw Exception('Server returned ${response.statusCode}');
+    }
+  }
+
+  Future<void> downloadFile({
+    required String filename,
+    required String savePath,
+    required Function(double) onProgress,
+  }) async {
+    try {
+      await _dio.download(
+        'http://$laptopIp:8081/download/$filename',
+        savePath,
+        onReceiveProgress: (received, total) {
+          if (total <= 0) return;
+          onProgress(received / total);
+        },
+        options: Options(receiveTimeout: const Duration(minutes: 5)),
+      );
+    } on DioException catch (e) {
+      final message = switch (e.type) {
+        DioExceptionType.connectionTimeout =>
+          'Connection timeout - check if laptop is reachable',
+        DioExceptionType.receiveTimeout =>
+          'Download timed out - file may be too large',
+        DioExceptionType.badResponse =>
+          'Server error (HTTP ${e.response?.statusCode ?? 'unknown'})',
+        DioExceptionType.connectionError =>
+          'Connection error - check IP address and network',
+        DioExceptionType.cancel => 'Download was cancelled',
+        _ => 'Download failed: ${e.message ?? 'unknown error'}',
+      };
+      throw Exception(message);
     }
   }
 }

@@ -53,3 +53,5 @@ daemon/go/daemon
 
 # Planning / design docs (local only)
 planning/
+.flutter-plugins-dependencies
+daemon/go/daemon_test

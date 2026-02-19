@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 class StorageService {
@@ -5,6 +7,7 @@ class StorageService {
   static const String _keyPollingInterval = 'polling_interval_seconds';
   static const String _keyReverseSyncEnabled = 'reverse_sync_enabled';
   static const String _keyHasSeenWelcomeTour = 'has_seen_welcome_tour';
+  static const String _keySeenFiles = 'seen_files';
 
   Future<String> getLaptopIp() async {
     final prefs = await SharedPreferences.getInstance();
@@ -44,5 +47,39 @@ class StorageService {
   Future<void> saveHasSeenWelcomeTour(bool seen) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyHasSeenWelcomeTour, seen);
+  }
+
+  Future<Set<String>> getSeenFiles() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(_keySeenFiles);
+    if (jsonStr == null || jsonStr.isEmpty) return {};
+    try {
+      final decoded = json.decode(jsonStr);
+      if (decoded is List) {
+        return decoded.whereType<String>().toSet();
+      }
+    } catch (_) {
+      return {};
+    }
+    return {};
+  }
+
+  Future<void> markFileAsSeen(String filename) async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = await getSeenFiles();
+    seen.add(filename);
+    await prefs.setString(_keySeenFiles, json.encode(seen.toList()));
+  }
+
+  Future<void> unmarkFileAsSeen(String filename) async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = await getSeenFiles();
+    seen.remove(filename);
+    await prefs.setString(_keySeenFiles, json.encode(seen.toList()));
+  }
+
+  Future<void> clearSeenFiles() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keySeenFiles);
   }
 }

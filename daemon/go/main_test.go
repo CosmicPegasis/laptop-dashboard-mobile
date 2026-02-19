@@ -19,6 +19,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -636,5 +638,122 @@ func TestSafePath_TraversalFilename_IsSanitised(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, dir) {
 		t.Errorf("sanitised path %q escaped dir %q", got, dir)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /list-files
+// ---------------------------------------------------------------------------
+
+func TestListFiles_ReturnsFiles(t *testing.T) {
+	orig := shareDir
+	shareDir = t.TempDir()
+	t.Cleanup(func() { shareDir = orig })
+
+	// Create test files
+	_ = os.WriteFile(filepath.Join(shareDir, "file1.txt"), []byte("content1"), 0o644)
+	_ = os.WriteFile(filepath.Join(shareDir, "file2.jpg"), []byte("content2"), 0o644)
+
+	base := startServer(t)
+	resp, err := http.Get(base + "/list-files")
+	if err != nil {
+		t.Fatalf("GET /list-files: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("want 200, got %d", resp.StatusCode)
+	}
+
+	var files []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&files); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("want 2 files, got %d", len(files))
+	}
+
+	found := false
+	for _, f := range files {
+		if f["name"] == "file1.txt" {
+			found = true
+			if f["size"].(float64) != 8 {
+				t.Errorf("file1.txt: want size 8, got %v", f["size"])
+			}
+		}
+	}
+	if !found {
+		t.Error("file1.txt not found in list")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /download/
+// ---------------------------------------------------------------------------
+
+func TestDownload_ValidFile_ReturnsContent(t *testing.T) {
+	orig := shareDir
+	shareDir = t.TempDir()
+	t.Cleanup(func() { shareDir = orig })
+
+	content := []byte("hello from laptop")
+	_ = os.WriteFile(filepath.Join(shareDir, "note.txt"), content, 0o644)
+
+	base := startServer(t)
+	resp, err := http.Get(base + "/download/note.txt")
+	if err != nil {
+		t.Fatalf("GET /download/note.txt: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("want 200, got %d", resp.StatusCode)
+	}
+
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(got, content) {
+		t.Errorf("want %q, got %q", content, got)
+	}
+}
+
+func TestDownload_NonExistentFile_Returns404(t *testing.T) {
+	orig := shareDir
+	shareDir = t.TempDir()
+	t.Cleanup(func() { shareDir = orig })
+
+	base := startServer(t)
+	resp, err := http.Get(base + "/download/missing.txt")
+	if err != nil {
+		t.Fatalf("GET /download/missing.txt: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 404 {
+		t.Errorf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestDownload_TraversalAttempt_Returns400(t *testing.T) {
+	orig := shareDir
+	shareDir = t.TempDir()
+	t.Cleanup(func() { shareDir = orig })
+
+	base := startServer(t)
+	// safePath handles traversal by stripping it, but /download/ uses
+	// strings.TrimPrefix then safePath. filepath.Clean inside safePath
+	// will also help.
+	resp, err := http.Get(base + "/download/../../etc/passwd")
+	if err != nil {
+		t.Fatalf("GET /download/traversal: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// If it's sanitised to "passwd" and doesn't exist, it might be 404.
+	// But our safePath returns err if it escapes.
+	// Actually safePath(shareDir, "../../etc/passwd") will base it to "passwd".
+	// So it will be 404 if "passwd" is not in shareDir.
+	if resp.StatusCode != 404 && resp.StatusCode != 400 {
+		t.Errorf("want 400 or 404, got %d", resp.StatusCode)
 	}
 }
