@@ -36,7 +36,7 @@ func startServer(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
-	srv := &http.Server{Handler: newMux()}
+	srv := &http.Server{Handler: corsMiddleware(newMux())}
 	go func() { _ = srv.Serve(listener) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return fmt.Sprintf("http://%s", listener.Addr().String())
@@ -281,12 +281,12 @@ func TestHandleSleep_SuccessResponse(t *testing.T) {
 	}
 }
 
-func TestPostStats_Returns404(t *testing.T) {
-	// POST /stats is not a valid endpoint
+func TestPostStats_Returns405(t *testing.T) {
+	// POST /stats is not a valid method for this endpoint
 	base := startServer(t)
 	status, _ := post(t, base, "/stats", jsonBody(map[string]string{}))
-	if status != 404 {
-		t.Errorf("want 404, got %d", status)
+	if status != 405 {
+		t.Errorf("want 405, got %d", status)
 	}
 }
 
@@ -583,11 +583,11 @@ func TestUpload_MissingFileField_Returns400(t *testing.T) {
 	}
 }
 
-func TestUpload_GetUpload_Returns404(t *testing.T) {
+func TestUpload_GetUpload_Returns405(t *testing.T) {
 	base := startServer(t)
 	status, _ := get(t, base, "/upload")
-	if status != 404 {
-		t.Errorf("want 404 for GET /upload, got %d", status)
+	if status != 405 {
+		t.Errorf("want 405 for GET /upload, got %d", status)
 	}
 }
 

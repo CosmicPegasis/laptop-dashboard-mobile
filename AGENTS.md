@@ -1,6 +1,6 @@
 # Laptop Dashboard Mobile
 
-Flutter-based mobile app and Python daemon for monitoring laptop statistics and performing remote actions (like sleep).
+Flutter-based mobile app and Go daemon for monitoring laptop statistics and performing remote actions (like sleep).
 
 ## Project Structure
 
@@ -32,7 +32,7 @@ Flutter-based mobile app and Python daemon for monitoring laptop statistics and 
   - `MethodChannel`: For checking notification access and opening system settings.
   - `EventChannel`: For streaming live notifications to the Dart side.
   - `NotificationListenerService`: For intercepting system notifications.
-- **Backend (Laptop)**: Python 3
+- **Backend (Laptop)**: Go
   - `psutil`: For system statistics.
   - `upower`: Fallback for battery statistics on certain Linux setups.
   - `http.server`: Minimal API server handling `/stats`, `/sleep`, and `/phone-notification`.
@@ -42,8 +42,8 @@ Flutter-based mobile app and Python daemon for monitoring laptop statistics and 
 
 ### Daemon
 ```bash
-cd daemon
-python3 stats_daemon.py
+cd daemon/go
+go run main.go
 ```
 
 ### Mobile App

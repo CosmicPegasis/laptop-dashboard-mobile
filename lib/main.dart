@@ -127,6 +127,10 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   String? _pickedFileName;
   bool _uploadSuccess = false;
 
+  // Lid inhibit state
+  bool _lidInhibitEnabled = false;
+  bool _lidInhibitLoaded = false;
+
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
   Future<void>? _notificationInitFuture;
@@ -139,6 +143,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _loadLaptopIp();
     _loadPollingInterval();
     _loadReverseSyncPreference();
+    _loadLidInhibitPreference();
     _checkAndShowWelcomeTour();
     _notificationInitFuture = _initializeNotifications();
     unawaited(_bootstrapNotificationPermission());
@@ -253,6 +258,19 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _loadLidInhibitPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedEnabled = prefs.getBool('lid_inhibit_enabled') ?? false;
+    if (!mounted) return;
+    setState(() {
+      _lidInhibitEnabled = savedEnabled;
+      _lidInhibitLoaded = true;
+    });
+    if (savedEnabled) {
+      _addLog('Lid inhibit enabled');
+    }
+  }
+
   Future<void> _saveReverseSyncPreference(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('reverse_sync_enabled', enabled);
@@ -280,6 +298,39 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _addLog('Reverse sync disabled');
     await _phoneNotificationSubscription?.cancel();
     _phoneNotificationSubscription = null;
+  }
+
+  Future<void> _saveLidInhibitPreference(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('lid_inhibit_enabled', enabled);
+  }
+
+  Future<void> _setLidInhibitEnabled(bool enabled) async {
+    if (!mounted) return;
+    setState(() {
+      _lidInhibitEnabled = enabled;
+    });
+    await _saveLidInhibitPreference(enabled);
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse('http://$laptopIp:8081/inhibit-lid-sleep'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'enabled': enabled}),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        _addLog('Lid inhibit ${enabled ? 'enabled' : 'disabled'}');
+      } else {
+        _addLog('Failed to set lid inhibit (${response.statusCode})');
+      }
+    } on TimeoutException {
+      _addLog('Lid inhibit request timed out');
+    } catch (e) {
+      _addLog('Lid inhibit error: ${e.toString().split('\n').first}');
+    }
   }
 
   Future<void> _refreshReverseSyncPermissionStatus() async {
@@ -1273,6 +1324,13 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 24),
             const Text(
+              'Lid Close Behavior',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            _buildLidInhibitCard(),
+            const SizedBox(height: 24),
+            const Text(
               'Reverse Sync',
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
@@ -1398,6 +1456,32 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
               const Text(
                 'Notification access granted. New phone notifications will appear on your laptop.',
               ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLidInhibitCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Prevent sleep on lid close'),
+              subtitle: const Text(
+                'Keep laptop awake when lid is closed. Uses loginctl to ignore lid close events.',
+              ),
+              value: _lidInhibitLoaded ? _lidInhibitEnabled : false,
+              onChanged: _lidInhibitLoaded ? _setLidInhibitEnabled : null,
+            ),
+            if (!_lidInhibitLoaded) ...[
+              const SizedBox(height: 8),
+              const Text('Loading...'),
             ],
           ],
         ),
