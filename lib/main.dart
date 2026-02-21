@@ -11,21 +11,56 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:dio/dio.dart';
 
+import 'widgets/status_card.dart';
+import 'widgets/log_card.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  final prefs = await SharedPreferences.getInstance();
+  final themeIndex = prefs.getInt('theme_mode') ?? 0;
+  final themeMode =
+      ThemeMode.values[themeIndex.clamp(0, ThemeMode.values.length - 1)];
+  runApp(MyApp(themeMode: themeMode));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final ThemeMode themeMode;
+
+  const MyApp({super.key, required this.themeMode});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Laptop Dashboard',
+      debugShowCheckedModeBanner: false,
+      themeMode: themeMode,
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF6366F1),
+          brightness: Brightness.light,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF6366F1),
+          brightness: Brightness.dark,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
       ),
       home: const MyHomePage(),
     );
@@ -52,6 +87,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   );
 
   String laptopIp = 'localhost';
+  ThemeMode _themeMode = ThemeMode.system;
   final TextEditingController _ipController = TextEditingController(
     text: 'localhost',
   );
@@ -180,6 +216,16 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     await _savePollingInterval(normalized);
     _startTimer();
     _addLog('Polling interval changed to ${_pollingIntervalSeconds}s');
+  }
+
+  Future<void> _setThemeMode(ThemeMode mode) async {
+    if (!mounted) return;
+    setState(() {
+      _themeMode = mode;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('theme_mode', mode.index);
+    _addLog('Theme changed to ${mode.name}');
   }
 
   void _updateLaptopIp(String value) {
@@ -887,7 +933,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-@override
+  @override
   Widget build(BuildContext context) {
     String appBarTitle;
     if (_selectedDrawerIndex == 1) {
@@ -958,53 +1004,111 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   }
 
   Widget _buildDashboardPage(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isConnected = cpu > 0 || ram > 0 || battery > 0;
+
     return SingleChildScrollView(
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            if (_notificationPermissionChecked &&
-                !_notificationPermissionGranted)
-              _buildNotificationPermissionCard(),
-            const SizedBox(height: 20),
-            const Text(
-              'Hello, Aviral!',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            SStatusCard(
-              cpu: cpu,
-              ram: ram,
-              temp: temp,
-              battery: battery,
-              isPlugged: isPlugged,
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              child: SizedBox(
-                width: double.infinity,
-                height: 60,
-                child: ElevatedButton.icon(
-                  onPressed: _isSleeping
-                      ? null
-                      : () => _showSleepConfirmation(context),
-                  icon: _isSleeping
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.power_settings_new),
-                  label: Text(_isSleeping ? 'Suspending...' : 'Sleep Laptop'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange.shade100,
-                    foregroundColor: Colors.orange.shade900,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              if (_notificationPermissionChecked &&
+                  !_notificationPermissionGranted)
+                _buildNotificationPermissionCard(),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.dashboard_rounded,
+                      color: colorScheme.primary,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Dashboard',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Text(
+                      isConnected ? 'Connected to laptop' : 'Not connected',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isConnected
+                            ? Colors.green.shade600
+                            : colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: isConnected ? Colors.green : Colors.grey,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              StatusCard(
+                cpu: cpu,
+                ram: ram,
+                temp: temp,
+                battery: battery,
+                isPlugged: isPlugged,
+              ),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: ElevatedButton.icon(
+                    onPressed: _isSleeping
+                        ? null
+                        : () => _showSleepConfirmation(context),
+                    icon: _isSleeping
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.bedtime),
+                    label: Text(_isSleeping ? 'Suspending...' : 'Sleep Laptop'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colorScheme.primaryContainer,
+                      foregroundColor: colorScheme.onPrimaryContainer,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-            LogCard(logs: _logs, scrollController: _scrollController),
-            const SizedBox(height: 20),
-          ],
+              const SizedBox(height: 16),
+              LogCard(logs: _logs, scrollController: _scrollController),
+              const SizedBox(height: 20),
+            ],
+          ),
         ),
       ),
     );
@@ -1038,7 +1142,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.upload_file),
-                label: Text(_isUploading ? 'Uploading...' : 'Pick & Upload File'),
+                label: Text(
+                  _isUploading ? 'Uploading...' : 'Pick & Upload File',
+                ),
               ),
             ),
             if (_pickedFileName != null) ...[
@@ -1057,7 +1163,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                 ],
               ),
             ],
-            if (_isUploading || (_uploadProgress > 0 && _uploadProgress < 1)) ...[
+            if (_isUploading ||
+                (_uploadProgress > 0 && _uploadProgress < 1)) ...[
               const SizedBox(height: 16),
               LinearProgressIndicator(
                 value: _isUploading ? _uploadProgress : null,
@@ -1085,7 +1192,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
                     child: Text(
                       _uploadStatusMessage!,
                       style: TextStyle(
-                        color: _uploadSuccess ? Colors.green.shade700 : Colors.red.shade700,
+                        color: _uploadSuccess
+                            ? Colors.green.shade700
+                            : Colors.red.shade700,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -1111,6 +1220,13 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
               _buildNotificationPermissionCard(),
               const SizedBox(height: 12),
             ],
+            const Text(
+              'Appearance',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            _buildThemeSelector(),
+            const SizedBox(height: 24),
             const Text(
               'Connection Settings',
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
@@ -1162,6 +1278,44 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 12),
             _buildReverseSyncCard(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThemeSelector() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Theme', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            SegmentedButton<ThemeMode>(
+              segments: const [
+                ButtonSegment(
+                  value: ThemeMode.system,
+                  label: Text('System'),
+                  icon: Icon(Icons.brightness_auto),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.light,
+                  label: Text('Light'),
+                  icon: Icon(Icons.light_mode),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.dark,
+                  label: Text('Dark'),
+                  icon: Icon(Icons.dark_mode),
+                ),
+              ],
+              selected: {_themeMode},
+              onSelectionChanged: (selection) {
+                _setThemeMode(selection.first);
+              },
+            ),
           ],
         ),
       ),
@@ -1396,157 +1550,4 @@ class _TourPageData {
     required this.title,
     required this.body,
   });
-}
-
-class SStatusCard extends StatelessWidget {
-  final double cpu;
-  final double ram;
-  final double temp;
-  final double battery;
-  final bool isPlugged;
-
-  const SStatusCard({
-    super.key,
-    required this.cpu,
-    required this.ram,
-    required this.temp,
-    required this.battery,
-    required this.isPlugged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final String plugStatus = isPlugged ? ' (Charging)' : '';
-    return Card(
-      elevation: 4,
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            const Text(
-              'Laptop Status',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            _StatusRow(label: 'CPU', value: '${cpu.toStringAsFixed(1)}%'),
-            const SizedBox(height: 8),
-            _StatusRow(label: 'RAM', value: '${ram.toStringAsFixed(1)}%'),
-            const SizedBox(height: 8),
-            _StatusRow(label: 'Temp', value: '${temp.toStringAsFixed(1)}°C'),
-            const SizedBox(height: 8),
-            _StatusRow(
-              label: 'Battery',
-              value: '${battery.toStringAsFixed(0)}%$plugStatus',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class LogCard extends StatelessWidget {
-  final List<String> logs;
-  final ScrollController scrollController;
-
-  const LogCard({
-    super.key,
-    required this.logs,
-    required this.scrollController,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 8,
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      color: const Color(0xFF1E1E1E), // Dark background
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        height: 250,
-        width: double.infinity,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              color: Colors.black,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.terminal, color: Colors.green, size: 16),
-                      SizedBox(width: 8),
-                      Text(
-                        'TERMINAL LOGS',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ],
-                  ),
-                  Text(
-                    '${logs.length} entries',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: Colors.green,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                child: ListView.builder(
-                  controller: scrollController,
-                  itemCount: logs.length,
-                  itemBuilder: (context, index) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 1),
-                      child: Text(
-                        logs[index],
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 11,
-                          color: Color(0xFFD4D4D4), // Light grey text
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StatusRow extends StatelessWidget {
-  final String label;
-  final String value;
-
-  const _StatusRow({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: const TextStyle(fontSize: 16)),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-        ),
-      ],
-    );
-  }
 }
