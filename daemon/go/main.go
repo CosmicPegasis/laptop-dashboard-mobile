@@ -1,10 +1,11 @@
 // stats_daemon — Go rewrite of the Python stats_daemon.py
-// Serves on port 8081 with four endpoints:
+// Serves on port 8081 with five endpoints:
 //
 //	GET  /stats               — system statistics JSON
 //	POST /sleep               — suspend the laptop
 //	POST /phone-notification  — forward a phone notification via notify-send
 //	POST /upload              — receive a file from the phone
+//	POST /inhibit-lid-sleep   — prevent sleep on lid close
 package main
 
 import (
@@ -43,6 +44,11 @@ const (
 // uploadDir is the directory (relative to $HOME) where uploaded files are saved.
 // Declared as a var so tests can override it with t.TempDir().
 var uploadDir = filepath.Join(os.Getenv("HOME"), "Downloads", "phone_transfers")
+
+// lidInhibitFile stores the lid inhibit state across daemon restarts.
+var lidInhibitFile = "lid_inhibit.state"
+
+var lidInhibitEnabled bool
 
 func setupLogging() {
 	rotatingFile := &lumberjack.Logger{
@@ -314,8 +320,6 @@ func handlePhoneNotification(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 // POST /upload
 // ---------------------------------------------------------------------------
-
-// ensureUploadDir creates the upload directory if it does not already exist.
 func ensureUploadDir() error {
 	return os.MkdirAll(uploadDir, 0o755)
 }
@@ -386,6 +390,74 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /inhibit-lid-sleep
+// ---------------------------------------------------------------------------
+
+type lidInhibitPayload struct {
+	Enabled bool `json:"enabled"`
+}
+
+func readLidInhibitState() error {
+	data, err := os.ReadFile(lidInhibitFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	enabled := string(data) == "enabled"
+	lidInhibitEnabled = enabled
+	return applyLidInhibit(enabled)
+}
+
+func writeLidInhibitState(enabled bool) error {
+	content := "disabled"
+	if enabled {
+		content = "enabled"
+	}
+	return os.WriteFile(lidInhibitFile, []byte(content), 0o644)
+}
+
+func applyLidInhibit(enabled bool) error {
+	mode := "suspend"
+	if enabled {
+		mode = "external"
+	}
+	cmd := exec.Command("loginctl", "set-handle-lid-switch", mode)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to set lid switch handling: %w", err)
+	}
+	slog.Info("Lid switch handling set", "mode", mode)
+	return nil
+}
+
+func handleInhibitLidSleep(w http.ResponseWriter, r *http.Request) {
+	var payload lidInhibitPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		errorJSON(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+
+	lidInhibitEnabled = payload.Enabled
+
+	if err := applyLidInhibit(payload.Enabled); err != nil {
+		slog.Error("Failed to apply lid inhibit", "err", err)
+		errorJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := writeLidInhibitState(payload.Enabled); err != nil {
+		slog.Error("Failed to persist lid inhibit state", "err", err)
+	}
+
+	slog.Info("Lid inhibit set", "enabled", payload.Enabled)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "success",
+		"enabled": strconv.FormatBool(payload.Enabled),
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -424,6 +496,14 @@ func newMux() *http.ServeMux {
 		handleUpload(w, r)
 	})
 
+	mux.HandleFunc("/inhibit-lid-sleep", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		handleInhibitLidSleep(w, r)
+	})
+
 	// Catch-all 404
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("Path not found", "path", r.URL.Path, "method", r.Method)
@@ -439,6 +519,11 @@ func newMux() *http.ServeMux {
 
 func main() {
 	setupLogging()
+
+	// Restore lid inhibit state from persistent storage
+	if err := readLidInhibitState(); err != nil {
+		slog.Warn("Failed to restore lid inhibit state", "err", err)
+	}
 
 	// Ensure the upload directory exists before accepting requests.
 	if err := ensureUploadDir(); err != nil {
