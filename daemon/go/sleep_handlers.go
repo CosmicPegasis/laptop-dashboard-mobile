@@ -6,10 +6,16 @@ import (
 	"os/exec"
 )
 
+// suspendCmd is the function called to suspend the system.
+// It is a variable so tests can replace it with a stub without
+// actually putting the machine to sleep.
+var suspendCmd = func() error {
+	return exec.Command("systemctl", "suspend").Run()
+}
+
 func handleSleep(w http.ResponseWriter, r *http.Request) {
 	slog.Info("Sleep request received. Putting laptop to sleep...")
-	cmd := exec.Command("systemctl", "suspend")
-	if err := cmd.Run(); err != nil {
+	if err := suspendCmd(); err != nil {
 		slog.Error("Error putting system to sleep", "err", err)
 		errorJSON(w, http.StatusInternalServerError, err.Error())
 		return

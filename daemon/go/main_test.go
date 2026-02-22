@@ -1,6 +1,5 @@
 // main_test.go — Go test suite for stats_daemon
 //
-// Mirrors every test case in the Python test_stats_daemon.py.
 // Tests are black-box HTTP integration tests: they spin up the real
 // HTTP mux on a random OS-assigned port and fire real requests.
 //
@@ -244,19 +243,21 @@ func TestGetRootPath_Returns404(t *testing.T) {
 // The success path is verified via httptest with a handler-level unit test.
 
 func TestPostSleep_Returns500WhenSuspendFails(t *testing.T) {
+	// Stub out the suspend command so the machine is never actually put to sleep.
+	orig := suspendCmd
+	suspendCmd = func() error { return fmt.Errorf("stub: suspend disabled in tests") }
+	t.Cleanup(func() { suspendCmd = orig })
+
 	base := startServer(t)
-	// In a CI / test environment systemctl suspend will fail → expect 500
 	status, body := post(t, base, "/sleep", nil)
-	if status != 200 && status != 500 {
-		t.Errorf("want 200 or 500, got %d", status)
+	if status != 500 {
+		t.Errorf("want 500, got %d", status)
 	}
-	if status == 500 {
-		if body["status"] != "error" {
-			t.Errorf("want status=error, got %v", body["status"])
-		}
-		if _, ok := body["message"]; !ok {
-			t.Error("error body must contain 'message'")
-		}
+	if body["status"] != "error" {
+		t.Errorf("want status=error, got %v", body["status"])
+	}
+	if _, ok := body["message"]; !ok {
+		t.Error("error body must contain 'message'")
 	}
 }
 
