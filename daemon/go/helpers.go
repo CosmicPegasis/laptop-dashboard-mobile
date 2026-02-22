@@ -12,7 +12,10 @@ import (
 	"sync"
 )
 
-var uploadDir = filepath.Join(os.Getenv("HOME"), "Downloads", "phone_transfers")
+var (
+	uploadDir = filepath.Join(os.Getenv("HOME"), "Downloads", "phone_transfers")
+	shareDir  = filepath.Join(os.Getenv("HOME"), "Downloads", "phone_share")
+)
 
 var lidInhibitFile = "lid_inhibit.state"
 
@@ -39,8 +42,8 @@ func truncate(s string, max int) string {
 	return s
 }
 
-func ensureUploadDir() error {
-	return os.MkdirAll(uploadDir, 0o755)
+func ensureDir(path string) error {
+	return os.MkdirAll(path, 0o755)
 }
 
 func safePath(dir, filename string) (string, error) {
