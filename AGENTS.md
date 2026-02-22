@@ -85,5 +85,5 @@ Delete tests for redundant or deprecated features.
 
 
 # How to Write Git Commits
-
+Always add which agent, in which editor was used to write the commit
 Break down the diffs into smaller logically related commits when committing code.
