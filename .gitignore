@@ -50,6 +50,7 @@ daemon/.pytest_cache/
 daemon/.benchmarks/
 ## Go binary
 daemon/go/daemon
+daemon/go/daemon_test
 
 # Planning / design docs (local only)
 planning/

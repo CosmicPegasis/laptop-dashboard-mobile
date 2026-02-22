@@ -1,6 +1,6 @@
 # Laptop Dashboard Mobile
 
-Flutter app + Python daemon for monitoring laptop stats from your phone and running remote actions.
+Flutter app + Go daemon for monitoring laptop stats from your phone and running remote actions.
 
 ## Features
 
@@ -8,15 +8,17 @@ Flutter app + Python daemon for monitoring laptop stats from your phone and runn
 - Remote suspend (`/sleep` endpoint)
 - Persistent Android status notification with laptop stats
 - Reverse sync: forwards phone notifications to the laptop daemon (`/phone-notification`)
+- File transfer: send files from phone to laptop (`/upload`)
+- Lid inhibit: prevent laptop from sleeping on lid close
 
 ## Run the daemon (laptop)
 
 ```bash
-cd daemon
-python3 stats_daemon.py
+cd daemon/go
+go run .
 ```
 
-Daemon listens on `0.0.0.0:8081`.
+Daemon listens on `0.0.0.0:8081`. Logs are written to `daemon/go/stats_daemon.log`.
 
 ## Run the app (phone)
 

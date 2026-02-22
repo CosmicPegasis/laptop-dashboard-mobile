@@ -6,8 +6,19 @@ Flutter-based mobile app and Go daemon for monitoring laptop statistics and perf
 
 - `lib/`: Flutter mobile app source code.
   - `main.dart`: Core application logic, including UI, state management, and notification handling.
-- `daemon/`: Python daemon that runs on the laptop.
-  - `stats_daemon.py`: Collects CPU, RAM, Temperature, and Battery stats and serves them over HTTP (port 8081).
+  - `widgets/`: Reusable UI components (`StatusCard`, `LogCard`).
+- `daemon/go/`: Go daemon that runs on the laptop.
+  - `main.go`: Entry point; starts the HTTP server and handles graceful shutdown.
+  - `router.go`: Route registration.
+  - `stats_handlers.go`: `/stats` endpoint — CPU, RAM, temperature, battery.
+  - `sleep_handlers.go`: `/sleep` endpoint — suspends the laptop.
+  - `notification_handlers.go`: `/phone-notification` endpoint — mirrors phone notifications via `notify-send`.
+  - `upload_handlers.go`: `/upload` endpoint — receives files sent from the phone.
+  - `lid_handlers.go`: `/inhibit-lid-sleep` endpoint — toggles lid-close suspend behaviour.
+  - `helpers.go`: Shared HTTP helpers, path validation, lid state persistence.
+  - `logging.go`: Log setup (file + stdout via `lumberjack`).
+  - `config.go`: Constants (port, etc.).
+  - `models.go`: Shared response structs.
 - `android/`: Android-specific configuration and build files.
 
 ## Features
@@ -18,8 +29,10 @@ Flutter-based mobile app and Go daemon for monitoring laptop statistics and perf
 - **IP Persistence**: Remembers the laptop's IP address across app launches.
 - **Phone Notification Sync**: Forwards Android notifications to the laptop for desktop popups (Reverse Sync).
 - **Custom Polling**: Configurable refresh interval for battery and performance stats (1s to 30s).
+- **File Transfer**: Send files from the phone to the laptop's `~/Downloads/phone_transfers/` directory.
+- **Lid Inhibit**: Prevent the laptop from sleeping when the lid is closed.
 - **Welcome Tour**: A walkthrough for first-time users.
-- **Settings Menu**: Sidebar (Drawer) navigation to separate Dashboard and Settings.
+- **Settings Menu**: Sidebar (Drawer) navigation to separate Dashboard, File Transfer, and Settings.
 
 ## Tech Stack
 
@@ -28,25 +41,29 @@ Flutter-based mobile app and Go daemon for monitoring laptop statistics and perf
   - `flutter_local_notifications`: For persistent status bar updates.
   - `shared_preferences`: For persisting IP, onboarding state, and preferences.
   - `permission_handler`: For managing notification and system permissions.
+  - `file_picker` / `dio`: For file selection and chunked uploads.
 - **Native Android (Kotlin)**:
   - `MethodChannel`: For checking notification access and opening system settings.
   - `EventChannel`: For streaming live notifications to the Dart side.
   - `NotificationListenerService`: For intercepting system notifications.
 - **Backend (Laptop)**: Go
-  - `psutil`: For system statistics.
-  - `upower`: Fallback for battery statistics on certain Linux setups.
-  - `http.server`: Minimal API server handling `/stats`, `/sleep`, and `/phone-notification`.
-  - `notify-send`: For displaying mirrored notifications on the laptop.
+  - `gopsutil/v3`: For CPU and RAM statistics.
+  - `upower` (CLI): For battery statistics on Linux.
+  - `loginctl` (CLI): For lid-close behaviour.
+  - `notify-send` (CLI): For displaying mirrored notifications on the laptop.
+  - `lumberjack`: For rotating log files.
 
 ## Build & Run
 
 ### Daemon
+
 ```bash
 cd daemon/go
-go run main.go
+go run .
 ```
 
 ### Mobile App
+
 ```bash
 # Get dependencies
 flutter pub get
@@ -57,7 +74,8 @@ flutter build apk --release
 
 ## Maintenance
 
-- **Daemon Logs**: Located at `daemon/stats_daemon.log`.
+- **Daemon Logs**: Located at `daemon/go/stats_daemon.log`.
+- **Uploaded Files**: Saved to `~/Downloads/phone_transfers/` on the laptop.
 - **Git Repository**: [https://github.com/CosmicPegasis/laptop-dashboard-mobile](https://github.com/CosmicPegasis/laptop-dashboard-mobile)
 
 ## How To Contribute
