@@ -2,32 +2,15 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"os/exec"
-	"strconv"
 	"strings"
 )
 
 func handlePhoneNotification(w http.ResponseWriter, r *http.Request) {
-	var raw []byte
-	if cl := r.Header.Get("Content-Length"); cl != "" {
-		length, err := strconv.Atoi(cl)
-		if err == nil && length > 0 {
-			raw = make([]byte, length)
-			if _, err = io.ReadFull(r.Body, raw); err != nil {
-				errorJSON(w, http.StatusBadRequest, "Failed to read body")
-				return
-			}
-		}
-	}
-	if len(raw) == 0 {
-		raw = []byte("{}")
-	}
-
 	var payload notificationPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		errorJSON(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}

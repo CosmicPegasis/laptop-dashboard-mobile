@@ -32,7 +32,7 @@ func newMux() *http.ServeMux {
 
 	mux.HandleFunc("POST /inhibit-lid-sleep", handleInhibitLidSleep)
 	mux.HandleFunc("GET /list-files", handleListFiles)
-	mux.HandleFunc("GET /download/", handleDownload)
+	mux.HandleFunc("GET /download/{filename}", handleDownload)
 
 	// Catch-all 404
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

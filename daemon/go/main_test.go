@@ -105,95 +105,36 @@ func TestGetStats_HasAllRequiredKeys(t *testing.T) {
 	}
 }
 
-func TestGetStats_CPUUsageIsNumeric(t *testing.T) {
+// TestGetStats_Fields validates all field types and value ranges in a single
+// request to avoid spinning up a new server for each assertion.
+func TestGetStats_Fields(t *testing.T) {
 	base := startServer(t)
 	_, body := get(t, base, "/stats")
-	if _, ok := body["cpu_usage"].(float64); !ok {
-		t.Errorf("cpu_usage should be a number, got %T", body["cpu_usage"])
-	}
-}
 
-func TestGetStats_RAMUsageIsNumeric(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	if _, ok := body["ram_usage"].(float64); !ok {
-		t.Errorf("ram_usage should be a number, got %T", body["ram_usage"])
+	numericFields := []string{"cpu_usage", "ram_usage", "cpu_temp", "battery_percent", "timestamp"}
+	for _, key := range numericFields {
+		if _, ok := body[key].(float64); !ok {
+			t.Errorf("%s should be a number, got %T", key, body[key])
+		}
 	}
-}
 
-func TestGetStats_CPUTempIsNumeric(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	if _, ok := body["cpu_temp"].(float64); !ok {
-		t.Errorf("cpu_temp should be a number, got %T", body["cpu_temp"])
-	}
-}
-
-func TestGetStats_BatteryPercentIsNumeric(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	if _, ok := body["battery_percent"].(float64); !ok {
-		t.Errorf("battery_percent should be a number, got %T", body["battery_percent"])
-	}
-}
-
-func TestGetStats_IsPluggedIsBool(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
 	if _, ok := body["is_plugged"].(bool); !ok {
 		t.Errorf("is_plugged should be a bool, got %T", body["is_plugged"])
 	}
-}
 
-func TestGetStats_TimestampIsNumeric(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	if _, ok := body["timestamp"].(float64); !ok {
-		t.Errorf("timestamp should be a number, got %T", body["timestamp"])
+	// Percentage fields must be in [0, 100]
+	for _, key := range []string{"cpu_usage", "ram_usage", "battery_percent"} {
+		if v, ok := body[key].(float64); ok && (v < 0 || v > 100) {
+			t.Errorf("%s out of range [0,100]: %f", key, v)
+		}
 	}
-}
 
-func TestGetStats_TimestampIsRecent(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	ts, ok := body["timestamp"].(float64)
-	if !ok {
-		t.Fatal("timestamp missing or not a number")
-	}
-	now := float64(time.Now().UnixMilli()) / 1000.0
-	diff := now - ts
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff > 5.0 {
-		t.Errorf("timestamp not recent: got %f, now %f (diff %f)", ts, now, diff)
-	}
-}
-
-func TestGetStats_CPUUsageInValidRange(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	v := body["cpu_usage"].(float64)
-	if v < 0 || v > 100 {
-		t.Errorf("cpu_usage out of range [0,100]: %f", v)
-	}
-}
-
-func TestGetStats_RAMUsageInValidRange(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	v := body["ram_usage"].(float64)
-	if v < 0 || v > 100 {
-		t.Errorf("ram_usage out of range [0,100]: %f", v)
-	}
-}
-
-func TestGetStats_BatteryPercentInValidRange(t *testing.T) {
-	base := startServer(t)
-	_, body := get(t, base, "/stats")
-	v := body["battery_percent"].(float64)
-	if v < 0 || v > 100 {
-		t.Errorf("battery_percent out of range [0,100]: %f", v)
+	// Timestamp must be within 5 seconds of now
+	if ts, ok := body["timestamp"].(float64); ok {
+		now := float64(time.Now().UnixMilli()) / 1000.0
+		if diff := now - ts; diff < -5.0 || diff > 5.0 {
+			t.Errorf("timestamp not recent: got %f, now %f (diff %f)", ts, now, diff)
+		}
 	}
 }
 

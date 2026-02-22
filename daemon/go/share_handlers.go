@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 )
 
 type fileInfo struct {
@@ -42,7 +41,7 @@ func handleListFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request) {
-	filename := strings.TrimPrefix(r.URL.Path, "/download/")
+	filename := r.PathValue("filename")
 	if filename == "" {
 		errorJSON(w, http.StatusBadRequest, "missing filename")
 		return
