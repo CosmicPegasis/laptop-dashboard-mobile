@@ -18,11 +18,11 @@ func main() {
 	setupLogging()
 
 	// Ensure upload/share directories exist before accepting requests.
-	if err := ensureUploadDir(); err != nil {
+	if err := ensureDir(uploadDir); err != nil {
 		slog.Error("Failed to create upload directory", "dir", uploadDir, "err", err)
 		os.Exit(1)
 	}
-	if err := ensureShareDir(); err != nil {
+	if err := ensureDir(shareDir); err != nil {
 		slog.Error("Failed to create share directory", "dir", shareDir, "err", err)
 		os.Exit(1)
 	}

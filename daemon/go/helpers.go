@@ -42,12 +42,8 @@ func truncate(s string, max int) string {
 	return s
 }
 
-func ensureUploadDir() error {
-	return os.MkdirAll(uploadDir, 0o755)
-}
-
-func ensureShareDir() error {
-	return os.MkdirAll(shareDir, 0o755)
+func ensureDir(path string) error {
+	return os.MkdirAll(path, 0o755)
 }
 
 func safePath(dir, filename string) (string, error) {
