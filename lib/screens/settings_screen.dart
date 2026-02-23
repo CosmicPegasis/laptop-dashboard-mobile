@@ -1,23 +1,22 @@
 import 'package:flutter/material.dart';
+import '../services/storage_service.dart';
+import '../services/notification_service.dart';
+import '../services/reverse_sync_service.dart';
+import '../widgets/notification_permission_card.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   final TextEditingController ipController;
   final String laptopIp;
   final int pollingIntervalSeconds;
   final int minPollingInterval;
   final int maxPollingInterval;
-  final bool reverseSyncEnabled;
-  final bool reverseSyncPermissionChecked;
-  final bool reverseSyncPermissionGranted;
-  final bool supportsReverseSync;
-  final bool notificationPermissionChecked;
-  final bool notificationPermissionGranted;
+  final StorageService storageService;
+  final NotificationService notificationService;
+  final ReverseSyncService reverseSyncService;
 
+  // Callbacks that still need to propagate to the shell / other screens
   final Function(String) onIpChanged;
   final Function(int) onPollingIntervalChanged;
-  final Function(bool) onReverseSyncChanged;
-  final VoidCallback onOpenReverseSyncSettings;
-  final VoidCallback onRequestNotificationPermission;
 
   const SettingsScreen({
     super.key,
@@ -26,18 +25,75 @@ class SettingsScreen extends StatelessWidget {
     required this.pollingIntervalSeconds,
     required this.minPollingInterval,
     required this.maxPollingInterval,
-    required this.reverseSyncEnabled,
-    required this.reverseSyncPermissionChecked,
-    required this.reverseSyncPermissionGranted,
-    required this.supportsReverseSync,
-    required this.notificationPermissionChecked,
-    required this.notificationPermissionGranted,
+    required this.storageService,
+    required this.notificationService,
+    required this.reverseSyncService,
     required this.onIpChanged,
     required this.onPollingIntervalChanged,
-    required this.onReverseSyncChanged,
-    required this.onOpenReverseSyncSettings,
-    required this.onRequestNotificationPermission,
   });
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  bool _notificationPermissionGranted = false;
+  bool _notificationPermissionChecked = false;
+  bool _reverseSyncEnabled = false;
+  bool _reverseSyncPermissionGranted = false;
+  bool _reverseSyncPermissionChecked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadState();
+  }
+
+  Future<void> _loadState() async {
+    final reverseSyncEnabled =
+        await widget.storageService.getReverseSyncEnabled();
+    final notifGranted =
+        await widget.notificationService.isPermissionGranted();
+    final reverseSyncGranted =
+        await widget.reverseSyncService.isNotificationAccessEnabled();
+
+    if (!mounted) return;
+    setState(() {
+      _reverseSyncEnabled = reverseSyncEnabled;
+      _notificationPermissionGranted = notifGranted;
+      _notificationPermissionChecked = true;
+      _reverseSyncPermissionGranted = reverseSyncGranted;
+      _reverseSyncPermissionChecked = true;
+    });
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    final granted =
+        await widget.notificationService.checkAndRequestPermission();
+    if (mounted) {
+      setState(() => _notificationPermissionGranted = granted);
+    }
+  }
+
+  Future<void> _setReverseSyncEnabled(bool enabled) async {
+    if (!widget.reverseSyncService.isSupported) return;
+    setState(() => _reverseSyncEnabled = enabled);
+    await widget.storageService.saveReverseSyncEnabled(enabled);
+
+    if (!enabled) {
+      widget.reverseSyncService.stopListening();
+    } else {
+      // Re-check permission when enabling
+      final granted =
+          await widget.reverseSyncService.isNotificationAccessEnabled();
+      if (mounted) {
+        setState(() {
+          _reverseSyncPermissionGranted = granted;
+          _reverseSyncPermissionChecked = true;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,8 +103,11 @@ class SettingsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (notificationPermissionChecked && !notificationPermissionGranted) ...[
-              _buildNotificationPermissionCard(),
+            if (_notificationPermissionChecked &&
+                !_notificationPermissionGranted) ...[
+              NotificationPermissionCard(
+                onRequestPermission: _requestNotificationPermission,
+              ),
               const SizedBox(height: 12),
             ],
             const Text(
@@ -61,17 +120,17 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             TextField(
-              controller: ipController,
+              controller: widget.ipController,
               decoration: const InputDecoration(
                 labelText: 'Laptop IP',
                 hintText: 'e.g. 192.168.1.10',
                 border: OutlineInputBorder(),
               ),
-              onChanged: onIpChanged,
+              onChanged: widget.onIpChanged,
             ),
             const SizedBox(height: 10),
             Text(
-              'Current target: $laptopIp:8081',
+              'Current target: ${widget.laptopIp}:8081',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 20),
@@ -81,15 +140,17 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Slider(
-              min: minPollingInterval.toDouble(),
-              max: maxPollingInterval.toDouble(),
-              divisions: maxPollingInterval - minPollingInterval,
-              label: '${pollingIntervalSeconds}s',
-              value: pollingIntervalSeconds.toDouble(),
-              onChanged: (value) => onPollingIntervalChanged(value.round()),
+              min: widget.minPollingInterval.toDouble(),
+              max: widget.maxPollingInterval.toDouble(),
+              divisions:
+                  widget.maxPollingInterval - widget.minPollingInterval,
+              label: '${widget.pollingIntervalSeconds}s',
+              value: widget.pollingIntervalSeconds.toDouble(),
+              onChanged: (value) =>
+                  widget.onPollingIntervalChanged(value.round()),
             ),
             Text(
-              'Current interval: ${pollingIntervalSeconds}s',
+              'Current interval: ${widget.pollingIntervalSeconds}s',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 24),
@@ -105,42 +166,13 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildNotificationPermissionCard() {
-    return Card(
-      color: Colors.orange.shade50,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Notifications are disabled',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Enable notifications to keep live laptop status updates in the notification tray.',
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton(
-                onPressed: onRequestNotificationPermission,
-                child: const Text('Enable notifications'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildReverseSyncCard() {
-    if (!supportsReverseSync) {
+    if (!widget.reverseSyncService.isSupported) {
       return const Card(
         child: Padding(
           padding: EdgeInsets.all(14),
-          child: Text('Reverse sync is currently supported on Android only.'),
+          child:
+              Text('Reverse sync is currently supported on Android only.'),
         ),
       );
     }
@@ -157,12 +189,12 @@ class SettingsScreen extends StatelessWidget {
               subtitle: const Text(
                 'Pushes Android notifications to the daemon endpoint at /phone-notification.',
               ),
-              value: reverseSyncEnabled,
-              onChanged: onReverseSyncChanged,
+              value: _reverseSyncEnabled,
+              onChanged: _setReverseSyncEnabled,
             ),
-            if (reverseSyncEnabled &&
-                reverseSyncPermissionChecked &&
-                !reverseSyncPermissionGranted) ...[
+            if (_reverseSyncEnabled &&
+                _reverseSyncPermissionChecked &&
+                !_reverseSyncPermissionGranted) ...[
               const SizedBox(height: 8),
               const Text(
                 'Notification access is required. Enable this app in Android notification access settings.',
@@ -171,12 +203,13 @@ class SettingsScreen extends StatelessWidget {
               Align(
                 alignment: Alignment.centerRight,
                 child: OutlinedButton(
-                  onPressed: onOpenReverseSyncSettings,
+                  onPressed:
+                      widget.reverseSyncService.openNotificationAccessSettings,
                   child: const Text('Open notification access'),
                 ),
               ),
             ],
-            if (reverseSyncEnabled && reverseSyncPermissionGranted) ...[
+            if (_reverseSyncEnabled && _reverseSyncPermissionGranted) ...[
               const SizedBox(height: 8),
               const Text(
                 'Notification access granted. New phone notifications will appear on your laptop.',

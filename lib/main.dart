@@ -1,11 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
-import 'package:path_provider/path_provider.dart';
 
-import 'models/file_info.dart';
 import 'services/storage_service.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
@@ -52,6 +49,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   late ApiService _apiService;
   StreamSubscription? _intentDataStreamSubscription;
 
+  // Key used to call methods on FileTransferScreen's state
+  final GlobalKey<FileTransferScreenState> _fileTransferKey = GlobalKey();
+
   String laptopIp = 'localhost';
   final TextEditingController _ipController = TextEditingController(
     text: 'localhost',
@@ -61,6 +61,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   static const int _minPollingIntervalSeconds = 1;
   static const int _maxPollingIntervalSeconds = 30;
 
+  // Stats (Dashboard)
   double cpu = 0.0;
   double ram = 0.0;
   double temp = 0.0;
@@ -77,26 +78,6 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   int _consecutiveFailures = 0;
   static const int _maxFailuresBeforeOffline = 20;
 
-  bool _notificationPermissionGranted = false;
-  bool _notificationPermissionChecked = false;
-  bool _reverseSyncEnabled = false;
-  bool _reverseSyncPermissionGranted = false;
-  bool _reverseSyncPermissionChecked = false;
-
-  // File transfer state
-  bool _isUploading = false;
-  double _uploadProgress = 0.0;
-  String? _uploadStatusMessage;
-  String? _pickedFileName;
-  bool _uploadSuccess = false;
-
-  // File download state
-  List<FileInfo> _availableFiles = [];
-  Set<String> _seenFiles = {};
-  int _newFileCount = 0;
-  bool _isDownloading = false;
-  Map<String, double> _fileDownloadProgress = {};
-
   @override
   void initState() {
     super.initState();
@@ -107,21 +88,14 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
   Future<void> _initApp() async {
     await _loadSettings();
-    await _loadSeenFiles();
     await _notificationService.initialize(
       onNotificationTap: _handleNotificationTap,
       onNotificationAction: _handleNotificationAction,
     );
-    await _checkPermissions();
     _startTimer();
     _addLog('Dashboard started');
     _initSharing();
     _checkAndShowWelcomeTour();
-  }
-
-  Future<void> _loadSeenFiles() async {
-    final seen = await _storageService.getSeenFiles();
-    setState(() => _seenFiles = seen);
   }
 
   void _handleNotificationTap(String? payload) {
@@ -132,103 +106,46 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
   void _handleNotificationAction(String action) {
     if (action == 'download') {
-      _downloadLatestFile();
+      setState(() => _selectedDrawerIndex = 1);
     }
   }
 
-  Future<void> _downloadLatestFile() async {
-    final newFiles = _availableFiles
-        .where((f) => !_seenFiles.contains(f.name))
-        .toList();
-    if (newFiles.isEmpty) return;
-
-    setState(() => _selectedDrawerIndex = 1);
-    final file = newFiles.first;
-    await _downloadFile(file);
-  }
-
   void _initSharing() {
-    // For sharing images coming from outside the app while the app is in the memory
     _intentDataStreamSubscription = ReceiveSharingIntent.instance
         .getMediaStream()
         .listen(
           (List<SharedMediaFile> value) {
-            if (value.isNotEmpty) {
-              _handleSharedFiles(value);
-            }
+            if (value.isNotEmpty) _handleSharedFiles(value);
           },
-          onError: (err) {
-            _addLog("getIntentDataStream error: $err");
-          },
+          onError: (err) => _addLog('getIntentDataStream error: $err'),
         );
 
-    // For sharing images coming from outside the app while the app is closed
     ReceiveSharingIntent.instance.getInitialMedia().then((
       List<SharedMediaFile> value,
     ) {
-      if (value.isNotEmpty) {
-        _handleSharedFiles(value);
-      }
+      if (value.isNotEmpty) _handleSharedFiles(value);
     });
   }
 
   Future<void> _handleSharedFiles(List<SharedMediaFile> files) async {
     _addLog('Received ${files.length} shared file(s)');
+    if (_selectedDrawerIndex != 1) setState(() => _selectedDrawerIndex = 1);
 
-    // Switch to File Transfer tab if not already there
-    if (_selectedDrawerIndex != 1) {
-      setState(() => _selectedDrawerIndex = 1);
+    final mapped = files
+        .map((f) => (path: f.path, name: f.path.split('/').last))
+        .toList();
+
+    for (final f in mapped) {
+      _addLog('Shared upload: ${f.name}');
     }
 
-    for (final file in files) {
-      final filePath = file.path;
-      // Extract filename from path
-      final fileName = filePath.split('/').last;
-
-      _addLog('Shared upload: $fileName');
-
-      setState(() {
-        _pickedFileName = fileName;
-        _isUploading = true;
-        _uploadProgress = 0.0;
-        _uploadStatusMessage = 'Uploading shared: $fileName';
-        _uploadSuccess = false;
-      });
-
-      try {
-        await _apiService.uploadFile(
-          filePath: filePath,
-          fileName: fileName,
-          onProgress: (p) => setState(() => _uploadProgress = p),
-        );
-        setState(() {
-          _uploadProgress = 1.0;
-          _uploadStatusMessage = 'Shared upload successful: $fileName';
-          _uploadSuccess = true;
-        });
-        _addLog('Uploaded shared: $fileName');
-
-        // Brief delay before starting next file if there are many
-        if (files.length > 1) {
-          await Future.delayed(const Duration(seconds: 1));
-        }
-      } catch (e) {
-        setState(() {
-          _uploadStatusMessage = 'Upload error: $e';
-          _uploadSuccess = false;
-        });
-        _addLog('Upload error: $e');
-        break; // Stop on first error for batch
-      } finally {
-        if (mounted) setState(() => _isUploading = false);
-      }
-    }
+    // Delegate to FileTransferScreen — it owns upload state
+    await _fileTransferKey.currentState?.uploadSharedFiles(mapped);
   }
 
   Future<void> _loadSettings() async {
     laptopIp = await _storageService.getLaptopIp();
     _pollingIntervalSeconds = await _storageService.getPollingInterval();
-    _reverseSyncEnabled = await _storageService.getReverseSyncEnabled();
 
     if (mounted) {
       setState(() {
@@ -238,27 +155,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _checkPermissions() async {
-    _notificationPermissionGranted = await _notificationService
-        .isPermissionGranted();
-    _reverseSyncPermissionGranted = await _reverseSyncService
-        .isNotificationAccessEnabled();
-
-    if (mounted) {
-      setState(() {
-        _notificationPermissionChecked = true;
-        _reverseSyncPermissionChecked = true;
-      });
-    }
-
-    if (_reverseSyncEnabled && _reverseSyncPermissionGranted) {
-      _startReverseSync();
-    }
-  }
-
   Future<void> _checkAndShowWelcomeTour() async {
     if (await _storageService.getHasSeenWelcomeTour()) return;
-
     if (!mounted) return;
     await Navigator.of(
       context,
@@ -328,38 +226,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   Future<void> _fetchFiles() async {
     try {
       final files = await _apiService.listFiles();
-
-      // Log all available files for download
-      // if (files.isEmpty) {
-      //   _addLog('No files available for download');
-      // } else {
-      //   final fileNames = files.map((f) => f.name).join(', ');
-      //   _addLog('Files available for download: $fileNames');
-      // }
-
-      // Calculate new files
-      final newFiles = files
-          .where((f) => !_availableFiles.any((af) => af.name == f.name))
-          .toList();
-
-      if (newFiles.isNotEmpty) {
-        final newFileNames = newFiles.map((f) => f.name).toSet();
-        _addLog('New files available: ${newFileNames.join(', ')}');
-
-        // Show notification for new files
-        await _notificationService.showNewFileNotification(
-          filename: newFiles.first.name,
-          newFileCount: newFiles.length,
-          onDownload: () {},
-        );
-      }
-
-      setState(() {
-        _availableFiles = files;
-        _newFileCount = _calculateNewFileCount();
-      });
+      _fileTransferKey.currentState?.updateAvailableFiles(files);
     } catch (e) {
-      // Silently fail - file fetching is secondary
+      // Silently fail — file fetching is secondary
     }
   }
 
@@ -408,24 +277,6 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     });
   }
 
-  void _startReverseSync() {
-    _reverseSyncService.startListening(
-      onEvent: (event) => _apiService
-          .forwardNotification(event)
-          .then((_) {
-            final title = event['title']?.toString();
-            final packageName =
-                event['package_name']?.toString() ?? 'unknown_app';
-            _addLog('Forwarded phone notification: ${title ?? packageName}');
-          })
-          .catchError((e) {
-            _addLog('Reverse sync error: $e');
-            return null;
-          }),
-      onError: (error) => _addLog('Reverse sync stream error: $error'),
-    );
-  }
-
   void _updateIp(String value) {
     final newIp = value.trim().isEmpty ? 'localhost' : value.trim();
     if (newIp == laptopIp) return;
@@ -447,23 +298,6 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _storageService.savePollingInterval(normalized);
     _startTimer();
     _addLog('Polling interval changed to ${normalized}s');
-  }
-
-  Future<void> _setReverseSyncEnabled(bool enabled) async {
-    if (!_reverseSyncService.isSupported) {
-      _addLog('Reverse sync requires Android');
-      return;
-    }
-    setState(() => _reverseSyncEnabled = enabled);
-    await _storageService.saveReverseSyncEnabled(enabled);
-
-    if (enabled) {
-      _addLog('Reverse sync enabled');
-      _checkPermissions();
-    } else {
-      _addLog('Reverse sync disabled');
-      _reverseSyncService.stopListening();
-    }
   }
 
   void _showSleepConfirmation() {
@@ -504,94 +338,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _pickAndUploadFile() async {
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
-    if (result == null || result.files.isEmpty) return;
-
-    final file = result.files.first;
-    final filePath = file.path;
-    if (filePath == null) return;
-
-    setState(() {
-      _pickedFileName = file.name;
-      _isUploading = true;
-      _uploadProgress = 0.0;
-      _uploadStatusMessage = null;
-      _uploadSuccess = false;
-    });
-    _addLog('Uploading: ${file.name}');
-
-    try {
-      await _apiService.uploadFile(
-        filePath: filePath,
-        fileName: file.name,
-        onProgress: (p) => setState(() => _uploadProgress = p),
-      );
-      setState(() {
-        _uploadProgress = 1.0;
-        _uploadStatusMessage = 'Upload successful!';
-        _uploadSuccess = true;
-      });
-      _addLog('Uploaded: ${file.name}');
-    } catch (e) {
-      setState(() {
-        _uploadStatusMessage = 'Upload error: $e';
-        _uploadSuccess = false;
-      });
-      _addLog('Upload error: $e');
-    } finally {
-      if (mounted) setState(() => _isUploading = false);
-    }
-  }
-
-  Future<void> _downloadFile(FileInfo file) async {
-    setState(() {
-      _isDownloading = true;
-      _fileDownloadProgress[file.name] = 0.0;
-    });
-    _addLog('Downloading: ${file.name}');
-
-    try {
-      final downloadsDir = await getDownloadsDirectory();
-      if (downloadsDir == null) {
-        throw Exception('Could not access Downloads folder');
-      }
-
-      final savePath = '${downloadsDir.path}/${file.name}';
-
-      await _apiService.downloadFile(
-        filename: file.name,
-        savePath: savePath,
-        onProgress: (p) => setState(() => _fileDownloadProgress[file.name] = p),
-      );
-
-      await _storageService.markFileAsSeen(file.name);
-      setState(() {
-        _seenFiles.add(file.name);
-        _newFileCount = _calculateNewFileCount();
-        _fileDownloadProgress[file.name] = 1.0;
-      });
-      _addLog('Downloaded: ${file.name}');
-    } catch (e) {
-      _addLog('Download error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
-      }
-    } finally {
-      setState(() => _isDownloading = false);
-    }
-  }
-
-  int _calculateNewFileCount() {
-    return _availableFiles.where((f) => !_seenFiles.contains(f.name)).length;
-  }
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkPermissions();
       _startTimer();
     }
   }
@@ -621,7 +370,41 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       drawer: _buildDrawer(),
-      body: _buildBody(),
+      body: IndexedStack(
+        index: _selectedDrawerIndex,
+        children: [
+          DashboardScreen(
+            cpu: cpu,
+            ram: ram,
+            temp: temp,
+            battery: battery,
+            isPlugged: isPlugged,
+            logs: _logs,
+            scrollController: _scrollController,
+            isSleeping: _isSleeping,
+            onSleepPressed: _showSleepConfirmation,
+          ),
+          FileTransferScreen(
+            key: _fileTransferKey,
+            laptopIp: laptopIp,
+            apiService: _apiService,
+            storageService: _storageService,
+            notificationService: _notificationService,
+          ),
+          SettingsScreen(
+            ipController: _ipController,
+            laptopIp: laptopIp,
+            pollingIntervalSeconds: _pollingIntervalSeconds,
+            minPollingInterval: _minPollingIntervalSeconds,
+            maxPollingInterval: _maxPollingIntervalSeconds,
+            storageService: _storageService,
+            notificationService: _notificationService,
+            reverseSyncService: _reverseSyncService,
+            onIpChanged: _updateIp,
+            onPollingIntervalChanged: _setPollingInterval,
+          ),
+        ],
+      ),
     );
   }
 
@@ -651,110 +434,14 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   }
 
   Widget _drawerTile(int index, IconData icon, String title) {
-    final bool showBadge = index == 1 && _newFileCount > 0;
     return ListTile(
-      leading: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Icon(icon),
-          if (showBadge)
-            Positioned(
-              right: -6,
-              top: -6,
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Colors.red,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                child: Text(
-                  '$_newFileCount',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-        ],
-      ),
+      leading: Icon(icon),
       title: Text(title),
       selected: _selectedDrawerIndex == index,
       onTap: () {
-        if (index == 1) {
-          // Mark all files as seen when opening File Transfer
-          for (final file in _availableFiles) {
-            if (!_seenFiles.contains(file.name)) {
-              _storageService.markFileAsSeen(file.name);
-            }
-          }
-          setState(() {
-            _seenFiles = Set.from(_availableFiles.map((f) => f.name));
-            _newFileCount = 0;
-          });
-        }
         setState(() => _selectedDrawerIndex = index);
         Navigator.pop(context);
       },
     );
-  }
-
-  Widget _buildBody() {
-    return switch (_selectedDrawerIndex) {
-      1 => FileTransferScreen(
-        laptopIp: laptopIp,
-        isUploading: _isUploading,
-        uploadProgress: _uploadProgress,
-        uploadStatusMessage: _uploadStatusMessage,
-        pickedFileName: _pickedFileName,
-        uploadSuccess: _uploadSuccess,
-        onPickAndUploadFile: _pickAndUploadFile,
-        availableFiles: _availableFiles,
-        seenFiles: _seenFiles,
-        isDownloading: _isDownloading,
-        fileDownloadProgress: _fileDownloadProgress,
-        onDownloadFile: _downloadFile,
-      ),
-      2 => SettingsScreen(
-        ipController: _ipController,
-        laptopIp: laptopIp,
-        pollingIntervalSeconds: _pollingIntervalSeconds,
-        minPollingInterval: _minPollingIntervalSeconds,
-        maxPollingInterval: _maxPollingIntervalSeconds,
-        reverseSyncEnabled: _reverseSyncEnabled,
-        reverseSyncPermissionChecked: _reverseSyncPermissionChecked,
-        reverseSyncPermissionGranted: _reverseSyncPermissionGranted,
-        supportsReverseSync: _reverseSyncService.isSupported,
-        notificationPermissionChecked: _notificationPermissionChecked,
-        notificationPermissionGranted: _notificationPermissionGranted,
-        onIpChanged: _updateIp,
-        onPollingIntervalChanged: _setPollingInterval,
-        onReverseSyncChanged: _setReverseSyncEnabled,
-        onOpenReverseSyncSettings:
-            _reverseSyncService.openNotificationAccessSettings,
-        onRequestNotificationPermission: () => _notificationService
-            .checkAndRequestPermission()
-            .then((v) => setState(() => _notificationPermissionGranted = v)),
-      ),
-      _ => DashboardScreen(
-        cpu: cpu,
-        ram: ram,
-        temp: temp,
-        battery: battery,
-        isPlugged: isPlugged,
-        logs: _logs,
-        scrollController: _scrollController,
-        isSleeping: _isSleeping,
-        notificationPermissionChecked: _notificationPermissionChecked,
-        notificationPermissionGranted: _notificationPermissionGranted,
-        onSleepPressed: _showSleepConfirmation,
-        onRequestNotificationPermission: () => _notificationService
-            .checkAndRequestPermission()
-            .then((v) => setState(() => _notificationPermissionGranted = v)),
-      ),
-    };
   }
 }

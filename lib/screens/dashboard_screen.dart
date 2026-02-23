@@ -11,10 +11,7 @@ class DashboardScreen extends StatelessWidget {
   final List<String> logs;
   final ScrollController scrollController;
   final bool isSleeping;
-  final bool notificationPermissionChecked;
-  final bool notificationPermissionGranted;
   final VoidCallback onSleepPressed;
-  final VoidCallback onRequestNotificationPermission;
 
   const DashboardScreen({
     super.key,
@@ -26,10 +23,7 @@ class DashboardScreen extends StatelessWidget {
     required this.logs,
     required this.scrollController,
     required this.isSleeping,
-    required this.notificationPermissionChecked,
-    required this.notificationPermissionGranted,
     required this.onSleepPressed,
-    required this.onRequestNotificationPermission,
   });
 
   @override
@@ -39,13 +33,7 @@ class DashboardScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            if (notificationPermissionChecked && !notificationPermissionGranted)
-              _buildNotificationPermissionCard(),
             const SizedBox(height: 20),
-            const Text(
-              'Hello, Aviral!',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
             StatusCard(
               cpu: cpu,
               ram: ram,
@@ -77,36 +65,6 @@ class DashboardScreen extends StatelessWidget {
             ),
             LogCard(logs: logs, scrollController: scrollController),
             const SizedBox(height: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNotificationPermissionCard() {
-    return Card(
-      color: Colors.orange.shade50,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Notifications are disabled',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Enable notifications to keep live laptop status updates in the notification tray.',
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton(
-                onPressed: onRequestNotificationPermission,
-                child: const Text('Enable notifications'),
-              ),
-            ),
           ],
         ),
       ),

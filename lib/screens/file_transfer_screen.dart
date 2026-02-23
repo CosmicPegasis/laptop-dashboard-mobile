@@ -1,37 +1,255 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/file_info.dart';
+import '../services/api_service.dart';
+import '../services/storage_service.dart';
+import '../services/notification_service.dart';
 
-class FileTransferScreen extends StatelessWidget {
-  final String laptopIp;
+// ---------------------------------------------------------------------------
+// Value object bundling all upload-related state.
+// ---------------------------------------------------------------------------
+class UploadState {
   final bool isUploading;
-  final double uploadProgress;
-  final String? uploadStatusMessage;
-  final String? pickedFileName;
-  final bool uploadSuccess;
-  final VoidCallback onPickAndUploadFile;
+  final double progress;
+  final String? statusMessage;
+  final String? fileName;
+  final bool success;
 
-  // File download properties
-  final List<FileInfo> availableFiles;
-  final Set<String> seenFiles;
-  final bool isDownloading;
-  final Map<String, double> fileDownloadProgress;
-  final Future<void> Function(FileInfo) onDownloadFile;
+  const UploadState({
+    this.isUploading = false,
+    this.progress = 0.0,
+    this.statusMessage,
+    this.fileName,
+    this.success = false,
+  });
+
+  UploadState copyWith({
+    bool? isUploading,
+    double? progress,
+    String? statusMessage,
+    String? fileName,
+    bool? success,
+  }) {
+    return UploadState(
+      isUploading: isUploading ?? this.isUploading,
+      progress: progress ?? this.progress,
+      statusMessage: statusMessage ?? this.statusMessage,
+      fileName: fileName ?? this.fileName,
+      success: success ?? this.success,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FileTransferScreen
+// ---------------------------------------------------------------------------
+class FileTransferScreen extends StatefulWidget {
+  final String laptopIp;
+  final ApiService apiService;
+  final StorageService storageService;
+  final NotificationService notificationService;
+  final void Function(int newFileCount) onNewFileCountChanged;
 
   const FileTransferScreen({
     super.key,
     required this.laptopIp,
-    required this.isUploading,
-    required this.uploadProgress,
-    this.uploadStatusMessage,
-    this.pickedFileName,
-    required this.uploadSuccess,
-    required this.onPickAndUploadFile,
-    required this.availableFiles,
-    required this.seenFiles,
-    required this.isDownloading,
-    required this.fileDownloadProgress,
-    required this.onDownloadFile,
+    required this.apiService,
+    required this.storageService,
+    required this.notificationService,
+    required this.onNewFileCountChanged,
   });
+
+  @override
+  State<FileTransferScreen> createState() => FileTransferScreenState();
+}
+
+class FileTransferScreenState extends State<FileTransferScreen> {
+  // Upload
+  UploadState _upload = const UploadState();
+
+  // Download
+  List<FileInfo> _availableFiles = [];
+  Set<String> _seenFiles = {};
+  bool _isDownloading = false;
+  final Map<String, double> _fileDownloadProgress = {};
+
+  /// Public read-only access for use by parent via GlobalKey.
+  List<FileInfo> get availableFiles => _availableFiles;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSeenFiles();
+  }
+
+  Future<void> _loadSeenFiles() async {
+    final seen = await widget.storageService.getSeenFiles();
+    if (mounted) setState(() => _seenFiles = seen);
+  }
+
+  // Called by parent (main.dart) when new files are polled from the daemon.
+  Future<void> updateAvailableFiles(List<FileInfo> files) async {
+    final newFiles = files
+        .where((f) => !_availableFiles.any((af) => af.name == f.name))
+        .toList();
+
+    if (newFiles.isNotEmpty) {
+      final newCountOverall = files
+          .where((f) => !_seenFiles.contains(f.name))
+          .length;
+      widget.onNewFileCountChanged(newCountOverall);
+
+      // Show notification for the newly discovered files
+      await widget.notificationService.showNewFileNotification(
+        filename: newFiles.first.name,
+        newFileCount: newFiles.length,
+        onDownload: () {},
+      );
+    }
+
+    if (mounted) {
+      setState(() {
+        _availableFiles = files;
+      });
+    }
+  }
+
+  int get newFileCount =>
+      _availableFiles.where((f) => !_seenFiles.contains(f.name)).length;
+
+  void markAllSeen() {
+    for (final file in _availableFiles) {
+      if (!_seenFiles.contains(file.name)) {
+        widget.storageService.markFileAsSeen(file.name);
+      }
+    }
+    setState(() {
+      _seenFiles = Set.from(_availableFiles.map((f) => f.name));
+    });
+    widget.onNewFileCountChanged(0);
+  }
+
+  Future<void> pickAndUploadFile() async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    final filePath = file.path;
+    if (filePath == null) return;
+
+    setState(() {
+      _upload = UploadState(
+        isUploading: true,
+        fileName: file.name,
+        progress: 0.0,
+      );
+    });
+
+    try {
+      await widget.apiService.uploadFile(
+        filePath: filePath,
+        fileName: file.name,
+        onProgress: (p) => setState(() => _upload = _upload.copyWith(progress: p)),
+      );
+      setState(() {
+        _upload = _upload.copyWith(
+          isUploading: false,
+          progress: 1.0,
+          statusMessage: 'Upload successful!',
+          success: true,
+        );
+      });
+    } catch (e) {
+      setState(() {
+        _upload = _upload.copyWith(
+          isUploading: false,
+          statusMessage: 'Upload error: $e',
+          success: false,
+        );
+      });
+    }
+  }
+
+  Future<void> uploadSharedFiles(List<({String path, String name})> files) async {
+    for (final file in files) {
+      setState(() {
+        _upload = UploadState(
+          isUploading: true,
+          fileName: file.name,
+          progress: 0.0,
+          statusMessage: 'Uploading shared: ${file.name}',
+        );
+      });
+
+      try {
+        await widget.apiService.uploadFile(
+          filePath: file.path,
+          fileName: file.name,
+          onProgress: (p) => setState(() => _upload = _upload.copyWith(progress: p)),
+        );
+        setState(() {
+          _upload = _upload.copyWith(
+            isUploading: false,
+            progress: 1.0,
+            statusMessage: 'Shared upload successful: ${file.name}',
+            success: true,
+          );
+        });
+        if (files.length > 1) await Future.delayed(const Duration(seconds: 1));
+      } catch (e) {
+        setState(() {
+          _upload = _upload.copyWith(
+            isUploading: false,
+            statusMessage: 'Upload error: $e',
+            success: false,
+          );
+        });
+        break;
+      }
+    }
+  }
+
+  Future<void> _downloadFile(FileInfo file) async {
+    setState(() {
+      _isDownloading = true;
+      _fileDownloadProgress[file.name] = 0.0;
+    });
+
+    try {
+      final downloadsDir = await getDownloadsDirectory();
+      if (downloadsDir == null) {
+        throw Exception('Could not access Downloads folder');
+      }
+
+      final savePath = '${downloadsDir.path}/${file.name}';
+      await widget.apiService.downloadFile(
+        filename: file.name,
+        savePath: savePath,
+        onProgress: (p) =>
+            setState(() => _fileDownloadProgress[file.name] = p),
+      );
+
+      await widget.storageService.markFileAsSeen(file.name);
+      setState(() {
+        _seenFiles.add(file.name);
+        _fileDownloadProgress[file.name] = 1.0;
+      });
+      widget.onNewFileCountChanged(newFileCount);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isDownloading = false);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Build
+  // ---------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -60,7 +278,7 @@ class FileTransferScreen extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          'Uploads to ~/Downloads/phone_transfers/ on $laptopIp',
+          'Uploads to ~/Downloads/phone_transfers/ on ${widget.laptopIp}',
           style: Theme.of(context).textTheme.bodyMedium,
           textAlign: TextAlign.center,
         ),
@@ -69,18 +287,19 @@ class FileTransferScreen extends StatelessWidget {
           width: double.infinity,
           height: 56,
           child: ElevatedButton.icon(
-            onPressed: isUploading ? null : onPickAndUploadFile,
-            icon: isUploading
+            onPressed: _upload.isUploading ? null : pickAndUploadFile,
+            icon: _upload.isUploading
                 ? const SizedBox(
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.upload_file),
-            label: Text(isUploading ? 'Uploading...' : 'Pick & Upload File'),
+            label:
+                Text(_upload.isUploading ? 'Uploading...' : 'Pick & Upload File'),
           ),
         ),
-        if (pickedFileName != null) ...[
+        if (_upload.fileName != null) ...[
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -89,7 +308,7 @@ class FileTransferScreen extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  pickedFileName!,
+                  _upload.fileName!,
                   style: const TextStyle(fontWeight: FontWeight.w500),
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
@@ -98,36 +317,36 @@ class FileTransferScreen extends StatelessWidget {
             ],
           ),
         ],
-        if (uploadProgress > 0 && uploadProgress < 1) ...[
+        if (_upload.progress > 0 && _upload.progress < 1) ...[
           const SizedBox(height: 16),
           LinearProgressIndicator(
-            value: uploadProgress,
+            value: _upload.progress,
             minHeight: 6,
             borderRadius: BorderRadius.circular(4),
           ),
           const SizedBox(height: 6),
           Text(
-            '${(uploadProgress * 100).toStringAsFixed(0)}%',
+            '${(_upload.progress * 100).toStringAsFixed(0)}%',
             style: Theme.of(context).textTheme.bodySmall,
             textAlign: TextAlign.center,
           ),
         ],
-        if (uploadStatusMessage != null) ...[
+        if (_upload.statusMessage != null) ...[
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                uploadSuccess ? Icons.check_circle : Icons.error,
-                color: uploadSuccess ? Colors.green : Colors.red,
+                _upload.success ? Icons.check_circle : Icons.error,
+                color: _upload.success ? Colors.green : Colors.red,
                 size: 18,
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  uploadStatusMessage!,
+                  _upload.statusMessage!,
                   style: TextStyle(
-                    color: uploadSuccess
+                    color: _upload.success
                         ? Colors.green.shade700
                         : Colors.red.shade700,
                     fontWeight: FontWeight.w500,
@@ -143,9 +362,8 @@ class FileTransferScreen extends StatelessWidget {
   }
 
   Widget _buildDownloadSection(BuildContext context) {
-    final newFiles = availableFiles
-        .where((f) => !seenFiles.contains(f.name))
-        .toList();
+    final newFiles =
+        _availableFiles.where((f) => !_seenFiles.contains(f.name)).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -159,7 +377,8 @@ class FileTransferScreen extends StatelessWidget {
             const SizedBox(width: 8),
             if (newFiles.isNotEmpty)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   color: Colors.red,
                   borderRadius: BorderRadius.circular(10),
@@ -181,7 +400,7 @@ class FileTransferScreen extends StatelessWidget {
           style: Theme.of(context).textTheme.bodyMedium,
         ),
         const SizedBox(height: 16),
-        if (availableFiles.isEmpty)
+        if (_availableFiles.isEmpty)
           _buildEmptyState()
         else
           _buildFileList(context),
@@ -219,13 +438,13 @@ class FileTransferScreen extends StatelessWidget {
     return ListView.separated(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      itemCount: availableFiles.length,
+      itemCount: _availableFiles.length,
       separatorBuilder: (ctx, idx) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
-        final file = availableFiles[index];
-        final isNew = !seenFiles.contains(file.name);
-        final progress = fileDownloadProgress[file.name] ?? 0.0;
-        final isFileDownloading = isDownloading && progress > 0 && progress < 1;
+        final file = _availableFiles[index];
+        final isNew = !_seenFiles.contains(file.name);
+        final progress = _fileDownloadProgress[file.name] ?? 0.0;
+        final isFileDownloading = _isDownloading && progress > 0 && progress < 1;
 
         return Card(
           elevation: 2,
@@ -310,9 +529,8 @@ class FileTransferScreen extends StatelessWidget {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: isFileDownloading
-                        ? null
-                        : () => onDownloadFile(file),
+                    onPressed:
+                        isFileDownloading ? null : () => _downloadFile(file),
                     icon: Icon(
                       progress == 1.0 ? Icons.refresh : Icons.download,
                       size: 18,
@@ -379,14 +597,11 @@ class FileTransferScreen extends StatelessWidget {
     final diff = now.difference(date);
 
     if (diff.inDays == 0) {
-      if (diff.inHours == 0) {
-        return '${diff.inMinutes} min ago';
-      }
+      if (diff.inHours == 0) return '${diff.inMinutes} min ago';
       return '${diff.inHours} hr ago';
     }
     if (diff.inDays == 1) return 'Yesterday';
     if (diff.inDays < 7) return '${diff.inDays} days ago';
-
     return '${date.month}/${date.day}/${date.year}';
   }
 }

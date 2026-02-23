@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/services.dart';
+import '../utils/type_coerce.dart';
 
 class ReverseSyncService {
   static const EventChannel _eventChannel = EventChannel(
@@ -55,7 +56,7 @@ class ReverseSyncService {
     final key = map['key']?.toString() ?? '';
     final title = map['title']?.toString() ?? '';
     final text = map['text']?.toString() ?? '';
-    final isOngoing = _toBool(map['is_ongoing']);
+    final isOngoing = coerceBool(map['is_ongoing']);
 
     if (title.isEmpty && text.isEmpty) return false;
     if (isOngoing) return false;
@@ -83,13 +84,4 @@ class ReverseSyncService {
     return true;
   }
 
-  bool _toBool(Object? value) {
-    if (value is bool) return value;
-    if (value is num) return value != 0;
-    if (value is String) {
-      final normalized = value.trim().toLowerCase();
-      return normalized == 'true' || normalized == '1' || normalized == 'yes';
-    }
-    return false;
-  }
 }

@@ -1,3 +1,5 @@
+import '../utils/type_coerce.dart';
+
 class FileInfo {
   final String name;
   final int size;
@@ -8,34 +10,9 @@ class FileInfo {
   factory FileInfo.fromJson(Map<String, dynamic> json) {
     return FileInfo(
       name: json['name'] as String? ?? '',
-      size: _toInt(json['size']),
-      modTime: _toDouble(json['mod_time']),
+      size: coerceInt(json['size']),
+      modTime: coerceDouble(json['mod_time']),
     );
-  }
-
-  static int _toInt(Object? value) {
-    if (value is int) return value;
-    if (value is double) return value.toInt();
-    if (value is String) return int.tryParse(value.trim()) ?? 0;
-    return 0;
-  }
-
-  static double _toDouble(Object? value) {
-    if (value is double) {
-      final parsed = value;
-      return parsed.isFinite ? parsed : 0.0;
-    }
-    if (value is int) {
-      final parsed = value.toDouble();
-      return parsed.isFinite ? parsed : 0.0;
-    }
-    if (value is String) {
-      final parsed = double.tryParse(value.trim());
-      if (parsed != null && parsed.isFinite) {
-        return parsed;
-      }
-    }
-    return 0.0;
   }
 
   String get sizeReadable {
