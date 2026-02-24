@@ -18,7 +18,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     final settings = ref.read(settingsProvider);
     ref
         .read(uploadProvider.notifier)
-        .setActive(settings.drawerIndex == 1, settings.pollingIntervalSeconds);
+        .setActive(true, settings.pollingIntervalSeconds);
   }
 
   @override

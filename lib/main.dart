@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'providers/riverpod_providers.dart';
+
 import 'providers/settings_notifier.dart';
-import 'screens/dashboard_screen.dart';
-import 'screens/file_transfer_screen.dart';
-import 'screens/settings_screen.dart';
+
+import 'router.dart';
 import 'screens/welcome_tour_screen.dart';
 
 void main() async {
@@ -18,13 +19,13 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
       title: 'Laptop Dashboard',
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
       ),
-      home: const MyHomePage(),
+      routerConfig: router,
     );
   }
 }
@@ -58,7 +59,6 @@ class _MyHomePageState extends ConsumerState<MyHomePage>
         .read(notificationProvider.notifier)
         .initializeApiService(ref.read(settingsProvider).laptopIp);
 
-    // Listen for settings changes
     ref.listen<SettingsState>(settingsProvider, (previous, next) {
       ref.read(statsProvider.notifier).updateFromSettings(next);
       ref
@@ -84,13 +84,13 @@ class _MyHomePageState extends ConsumerState<MyHomePage>
 
   void _handleNotificationTap(String? payload) {
     if (payload == 'file_transfer') {
-      ref.read(settingsProvider.notifier).setDrawerIndex(1);
+      router.go('/files');
     }
   }
 
   void _handleNotificationAction(String action) {
     if (action == 'download') {
-      ref.read(settingsProvider.notifier).setDrawerIndex(1);
+      router.go('/files');
     }
   }
 
@@ -122,75 +122,6 @@ class _MyHomePageState extends ConsumerState<MyHomePage>
 
   @override
   Widget build(BuildContext context) {
-    final settings = ref.watch(settingsProvider);
-    String appBarTitle = switch (settings.drawerIndex) {
-      1 => 'File Transfer',
-      2 => 'Settings',
-      _ => 'Laptop Dashboard',
-    };
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(appBarTitle),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      drawer: _buildDrawer(),
-      body: IndexedStack(
-        index: settings.drawerIndex,
-        children: const [
-          DashboardScreen(),
-          FileTransferScreen(),
-          SettingsScreen(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDrawer() {
-    final settings = ref.watch(settingsProvider);
-    return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          DrawerHeader(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primaryContainer,
-            ),
-            child: const Align(
-              alignment: Alignment.bottomLeft,
-              child: Text(
-                'Laptop Dashboard',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-          _drawerTile(0, Icons.dashboard, 'Dashboard', settings.drawerIndex),
-          _drawerTile(
-            1,
-            Icons.upload_file,
-            'File Transfer',
-            settings.drawerIndex,
-          ),
-          _drawerTile(2, Icons.settings, 'Settings', settings.drawerIndex),
-        ],
-      ),
-    );
-  }
-
-  Widget _drawerTile(
-    int index,
-    IconData icon,
-    String title,
-    int selectedIndex,
-  ) {
-    return ListTile(
-      leading: Icon(icon),
-      title: Text(title),
-      selected: selectedIndex == index,
-      onTap: () {
-        ref.read(settingsProvider.notifier).setDrawerIndex(index);
-        Navigator.pop(context);
-      },
-    );
+    return const SizedBox.shrink();
   }
 }
