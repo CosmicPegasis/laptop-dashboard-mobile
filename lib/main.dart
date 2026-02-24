@@ -1,3 +1,19 @@
+/**
+ * Laptop Dashboard Mobile - main.dart
+ *
+ * Entry point for the Flutter app. Manages laptop stats monitoring, file transfer,
+ * notifications, and settings via a Go daemon on the laptop.
+ *
+ * Key Concepts for Flutter Beginners:
+ * - main(): Starts the app with runApp().
+ * - MaterialApp: Root widget with theme and home page.
+ * - StatefulWidget: For UI with changing data (stats, logs). Uses setState() to rebuild.
+ * - Timer.periodic(): Repeats tasks like polling stats.
+ * - Scaffold: App layout with AppBar, body, drawer.
+ * - Drawer + IndexedStack: Navigation between screens.
+ *
+ * See: https://docs.flutter.dev/get-started
+ */
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -49,8 +65,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   late ApiService _apiService;
   StreamSubscription? _intentDataStreamSubscription;
 
-  // Key used to call methods on FileTransferScreen's state
-  final GlobalKey<FileTransferScreenState> _fileTransferKey = GlobalKey();
+  List<({String path, String name})> _pendingSharedFiles = [];
 
   String laptopIp = 'localhost';
   final TextEditingController _ipController = TextEditingController(
@@ -78,6 +93,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   int _consecutiveFailures = 0;
   static const int _maxFailuresBeforeOffline = 20;
 
+  /// initState(): Called once when widget is inserted into tree.
+  /// Sets up observer for app lifecycle, initializes API service, starts app init.
   @override
   void initState() {
     super.initState();
@@ -86,7 +103,13 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _initApp();
   }
 
-  Future<void> _initApp() async {
+    /// Initializes app services and features after widget is built.
+    /// - Loads saved settings (IP, polling interval).
+    /// - Sets up notifications with callbacks.
+    /// - Starts stats polling timer.
+    /// - Sets up file sharing listener.
+    /// - Shows welcome tour if first launch.
+    Future<void> _initApp() async {
     await _loadSettings();
     await _notificationService.initialize(
       onNotificationTap: _handleNotificationTap,
@@ -110,7 +133,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
-  void _initSharing() {
+    /// Sets up listener for Android share intents (e.g., share image from gallery -> upload).
+    /// Uses ReceiveSharingIntent plugin stream for new shares + initial share.
+    void _initSharing() {
     _intentDataStreamSubscription = ReceiveSharingIntent.instance
         .getMediaStream()
         .listen(
@@ -127,9 +152,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _handleSharedFiles(List<SharedMediaFile> files) async {
+    /// Processes shared files: logs them, adds to pending queue, switches to File Transfer screen.
+    Future<void> _handleSharedFiles(List<SharedMediaFile> files) async {
     _addLog('Received ${files.length} shared file(s)');
-    if (_selectedDrawerIndex != 1) setState(() => _selectedDrawerIndex = 1);
 
     final mapped = files
         .map((f) => (path: f.path, name: f.path.split('/').last))
@@ -139,11 +164,14 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       _addLog('Shared upload: ${f.name}');
     }
 
-    // Delegate to FileTransferScreen — it owns upload state
-    await _fileTransferKey.currentState?.uploadSharedFiles(mapped);
+    setState(() {
+      _pendingSharedFiles = mapped;
+      if (_selectedDrawerIndex != 1) _selectedDrawerIndex = 1;
+    });
   }
 
-  Future<void> _loadSettings() async {
+    /// Loads persisted settings from SharedPreferences via StorageService.
+    Future<void> _loadSettings() async {
     laptopIp = await _storageService.getLaptopIp();
     _pollingIntervalSeconds = await _storageService.getPollingInterval();
 
@@ -165,7 +193,9 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _addLog('Welcome tour completed');
   }
 
-  void _startTimer() {
+    /// Starts or restarts the polling timer.
+    /// Cancels old timer, creates new Timer.periodic to call _fetchAll() every interval.
+    void _startTimer() {
     _timer?.cancel();
     _timer = Timer.periodic(
       Duration(seconds: _pollingIntervalSeconds),
@@ -173,11 +203,18 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _fetchAll() async {
-    await Future.wait([_fetchStats(), _fetchFiles()]);
+    /// Wrapper for _fetchStats() (future expansion for more fetches).
+    Future<void> _fetchAll() async {
+    await _fetchStats();
   }
 
-  Future<void> _fetchStats() async {
+    /// Core polling logic: Fetches stats from laptop daemon API.
+    /// - Prevents concurrent fetches.
+    /// - Updates state if changed.
+    /// - Updates notification.
+    /// - Logs periodically or on change.
+    /// - Handles errors -> offline detection.
+    Future<void> _fetchStats() async {
     if (_isFetchingStats) return;
     _isFetchingStats = true;
     try {
@@ -223,15 +260,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _fetchFiles() async {
-    try {
-      final files = await _apiService.listFiles();
-      _fileTransferKey.currentState?.updateAvailableFiles(files);
-    } catch (e) {
-      // Silently fail — file fetching is secondary
-    }
-  }
 
+  /// Tracks failed fetches. After _maxFailuresBeforeOffline, shows persistent offline notification.
   Future<void> _markOffline(String reason) async {
     _consecutiveFailures++;
     if (_consecutiveFailures < _maxFailuresBeforeOffline) {
@@ -250,6 +280,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
+  /// Resets failure count, cancels offline notification when connection restores.
   Future<void> _markOnline() async {
     _consecutiveFailures = 0;
     if (!_offlineNotificationShown) return;
@@ -258,6 +289,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _addLog('Connection restored to $laptopIp');
   }
 
+  /// Adds timestamped log entry, limits to 100, auto-scrolls list.
+  /// Uses setState() to rebuild log UI.
   void _addLog(String message) {
     if (!mounted) return;
     final timestamp = DateFormat('HH:mm:ss').format(DateTime.now());
@@ -277,6 +310,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     });
   }
 
+  /// Updates laptop IP: validates, recreates ApiService, saves to storage, logs.
   void _updateIp(String value) {
     final newIp = value.trim().isEmpty ? 'localhost' : value.trim();
     if (newIp == laptopIp) return;
@@ -288,6 +322,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _addLog('IP changed to $laptopIp');
   }
 
+  /// Updates polling interval (clamps 1-30s), saves, restarts timer, logs.
   void _setPollingInterval(int seconds) {
     final normalized = seconds.clamp(
       _minPollingIntervalSeconds,
@@ -300,6 +335,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     _addLog('Polling interval changed to ${normalized}s');
   }
 
+  /// Shows confirmation dialog before sleeping laptop (safety check).
   void _showSleepConfirmation() {
     showDialog(
       context: context,
@@ -326,6 +362,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Calls laptop /sleep endpoint, shows loading, logs result.
   Future<void> _sleepLaptop() async {
     setState(() => _isSleeping = true);
     try {
@@ -338,6 +375,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
+  /// Lifecycle callback: Restarts timer when app resumes (from background).
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -345,6 +383,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     }
   }
 
+  /// Cleanup: Stops timer, subscriptions, observers, controllers.
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -356,6 +395,8 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  /// Builds UI: Dynamic AppBar title, Drawer nav, IndexedStack for screens.
+  /// Passes state/services to child screens (Dashboard/File/Settings).
   @override
   Widget build(BuildContext context) {
     String appBarTitle = switch (_selectedDrawerIndex) {
@@ -385,11 +426,14 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
             onSleepPressed: _showSleepConfirmation,
           ),
           FileTransferScreen(
-            key: _fileTransferKey,
             laptopIp: laptopIp,
             apiService: _apiService,
             storageService: _storageService,
             notificationService: _notificationService,
+            pendingSharedFiles: _pendingSharedFiles,
+            onPendingHandled: () => setState(() => _pendingSharedFiles = []),
+            isActive: _selectedDrawerIndex == 1,
+            filePollingIntervalSeconds: _pollingIntervalSeconds,
           ),
           SettingsScreen(
             ipController: _ipController,
@@ -408,6 +452,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Builds navigation Drawer with 3 tiles (Dashboard, Files, Settings).
   Widget _buildDrawer() {
     return Drawer(
       child: ListView(
@@ -433,6 +478,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Single drawer ListTile: icon, title, selected highlight, onTap switches screen.
   Widget _drawerTile(int index, IconData icon, String title) {
     return ListTile(
       leading: Icon(icon),

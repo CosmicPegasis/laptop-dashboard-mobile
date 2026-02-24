@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -49,7 +50,10 @@ class FileTransferScreen extends StatefulWidget {
   final ApiService apiService;
   final StorageService storageService;
   final NotificationService notificationService;
-  final void Function(int newFileCount) onNewFileCountChanged;
+  final List<({String path, String name})>? pendingSharedFiles;
+  final VoidCallback? onPendingHandled;
+  final bool isActive;
+  final int filePollingIntervalSeconds;
 
   const FileTransferScreen({
     super.key,
@@ -57,14 +61,17 @@ class FileTransferScreen extends StatefulWidget {
     required this.apiService,
     required this.storageService,
     required this.notificationService,
-    required this.onNewFileCountChanged,
+    this.pendingSharedFiles,
+    this.onPendingHandled,
+    this.isActive = false,
+    this.filePollingIntervalSeconds = 5,
   });
 
   @override
   State<FileTransferScreen> createState() => FileTransferScreenState();
 }
 
-class FileTransferScreenState extends State<FileTransferScreen> {
+class FileTransferScreenState extends State<FileTransferScreen> with TickerProviderStateMixin {
   // Upload
   UploadState _upload = const UploadState();
 
@@ -74,13 +81,33 @@ class FileTransferScreenState extends State<FileTransferScreen> {
   bool _isDownloading = false;
   final Map<String, double> _fileDownloadProgress = {};
 
-  /// Public read-only access for use by parent via GlobalKey.
-  List<FileInfo> get availableFiles => _availableFiles;
+  Timer? _filePollTimer;
 
   @override
   void initState() {
     super.initState();
     _loadSeenFiles();
+    if (widget.isActive) _startFilePolling();
+  }
+
+  @override
+  void didUpdateWidget(FileTransferScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // Handle pending shared files
+    if (widget.pendingSharedFiles != oldWidget.pendingSharedFiles &&
+        widget.pendingSharedFiles?.isNotEmpty == true) {
+      _uploadSharedFiles(widget.pendingSharedFiles!);
+      widget.onPendingHandled?.call();
+    }
+
+    // Handle isActive change
+    if (widget.isActive && !oldWidget.isActive) {
+      _startFilePolling();
+      _refreshFiles();
+    } else if (!widget.isActive && oldWidget.isActive) {
+      _stopFilePolling();
+    }
   }
 
   Future<void> _loadSeenFiles() async {
@@ -88,47 +115,6 @@ class FileTransferScreenState extends State<FileTransferScreen> {
     if (mounted) setState(() => _seenFiles = seen);
   }
 
-  // Called by parent (main.dart) when new files are polled from the daemon.
-  Future<void> updateAvailableFiles(List<FileInfo> files) async {
-    final newFiles = files
-        .where((f) => !_availableFiles.any((af) => af.name == f.name))
-        .toList();
-
-    if (newFiles.isNotEmpty) {
-      final newCountOverall = files
-          .where((f) => !_seenFiles.contains(f.name))
-          .length;
-      widget.onNewFileCountChanged(newCountOverall);
-
-      // Show notification for the newly discovered files
-      await widget.notificationService.showNewFileNotification(
-        filename: newFiles.first.name,
-        newFileCount: newFiles.length,
-        onDownload: () {},
-      );
-    }
-
-    if (mounted) {
-      setState(() {
-        _availableFiles = files;
-      });
-    }
-  }
-
-  int get newFileCount =>
-      _availableFiles.where((f) => !_seenFiles.contains(f.name)).length;
-
-  void markAllSeen() {
-    for (final file in _availableFiles) {
-      if (!_seenFiles.contains(file.name)) {
-        widget.storageService.markFileAsSeen(file.name);
-      }
-    }
-    setState(() {
-      _seenFiles = Set.from(_availableFiles.map((f) => f.name));
-    });
-    widget.onNewFileCountChanged(0);
-  }
 
   Future<void> pickAndUploadFile() async {
     final result = await FilePicker.platform.pickFiles(allowMultiple: false);
@@ -235,7 +221,6 @@ class FileTransferScreenState extends State<FileTransferScreen> {
         _seenFiles.add(file.name);
         _fileDownloadProgress[file.name] = 1.0;
       });
-      widget.onNewFileCountChanged(newFileCount);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(

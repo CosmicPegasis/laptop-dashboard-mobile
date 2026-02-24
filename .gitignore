@@ -56,3 +56,4 @@ daemon/go/daemon_test
 planning/
 .flutter-plugins-dependencies
 daemon/go/daemon_test
+.kilocode/
