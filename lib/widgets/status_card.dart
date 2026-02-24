@@ -1,49 +1,55 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../constants.dart';
+import '../providers/stats_notifier.dart';
 
 class StatusCard extends StatelessWidget {
-  final double cpu;
-  final double ram;
-  final double temp;
-  final double battery;
-  final bool isPlugged;
-
-  const StatusCard({
-    super.key,
-    required this.cpu,
-    required this.ram,
-    required this.temp,
-    required this.battery,
-    required this.isPlugged,
-  });
+  const StatusCard({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final String plugStatus = isPlugged ? ' (Charging)' : '';
-    return Card(
-      elevation: 4,
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            const Text(
-              'Laptop Status',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+    return Consumer<StatsNotifier>(
+      builder: (context, stats, _) {
+        final String plugStatus = stats.isPlugged ? ' (Charging)' : '';
+        return Card(
+          elevation: 4,
+          margin: EdgeInsets.symmetric(
+            horizontal: kHorizontalPadding,
+            vertical: 10,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              children: [
+                const Text(
+                  'Laptop Status',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: kVerticalPadding),
+                _StatusRow(
+                  label: 'CPU',
+                  value: '${stats.cpu.toStringAsFixed(1)}%',
+                ),
+                const SizedBox(height: kSmallSpacing),
+                _StatusRow(
+                  label: 'RAM',
+                  value: '${stats.ram.toStringAsFixed(1)}%',
+                ),
+                const SizedBox(height: kSmallSpacing),
+                _StatusRow(
+                  label: 'Temp',
+                  value: '${stats.temp.toStringAsFixed(1)}°C',
+                ),
+                const SizedBox(height: kSmallSpacing),
+                _StatusRow(
+                  label: 'Battery',
+                  value: '${stats.battery.toStringAsFixed(0)}%$plugStatus',
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            _StatusRow(label: 'CPU', value: '${cpu.toStringAsFixed(1)}%'),
-            const SizedBox(height: 8),
-            _StatusRow(label: 'RAM', value: '${ram.toStringAsFixed(1)}%'),
-            const SizedBox(height: 8),
-            _StatusRow(label: 'Temp', value: '${temp.toStringAsFixed(1)}°C'),
-            const SizedBox(height: 8),
-            _StatusRow(
-              label: 'Battery',
-              value: '${battery.toStringAsFixed(0)}%$plugStatus',
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

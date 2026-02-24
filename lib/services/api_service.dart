@@ -2,19 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
+import '../constants.dart';
 import '../models/app_stats.dart';
 import '../models/file_info.dart';
 
 class ApiService {
   final String laptopIp;
-  final Dio _dio = Dio();
+  late final http.Client _httpClient;
+  late final Dio _dio;
 
-  ApiService({required this.laptopIp});
+  ApiService({required this.laptopIp, http.Client? httpClient, Dio? dio})
+    : _httpClient = httpClient ?? http.Client(),
+      _dio = dio ?? Dio();
 
   Future<AppStats> fetchStats() async {
-    final response = await http
-        .get(Uri.parse('http://$laptopIp:8081/stats'))
-        .timeout(const Duration(seconds: 5));
+    final response = await _httpClient
+        .get(Uri.parse('http://$laptopIp:$kDaemonPort/stats'))
+        .timeout(kDefaultTimeout);
 
     if (response.statusCode == 200) {
       final decoded = json.decode(response.body);
@@ -28,9 +32,9 @@ class ApiService {
   }
 
   Future<void> sleepLaptop() async {
-    final response = await http
-        .post(Uri.parse('http://$laptopIp:8081/sleep'))
-        .timeout(const Duration(seconds: 5));
+    final response = await _httpClient
+        .post(Uri.parse('http://$laptopIp:$kDaemonPort/sleep'))
+        .timeout(kDefaultTimeout);
 
     if (response.statusCode != 200) {
       throw Exception('Could not sleep laptop (HTTP ${response.statusCode})');
@@ -48,15 +52,15 @@ class ApiService {
 
     try {
       final response = await _dio.post(
-        'http://$laptopIp:8081/upload',
+        'http://$laptopIp:$kDaemonPort/upload',
         data: formData,
         onSendProgress: (sent, total) {
           if (total <= 0) return;
           onProgress(sent / total);
         },
         options: Options(
-          sendTimeout: const Duration(minutes: 5),
-          receiveTimeout: const Duration(seconds: 10),
+          sendTimeout: kUploadTimeout,
+          receiveTimeout: kReceiveTimeout,
         ),
       );
 
@@ -82,13 +86,13 @@ class ApiService {
   }
 
   Future<void> forwardNotification(Map<String, dynamic> payload) async {
-    final response = await http
+    final response = await _httpClient
         .post(
-          Uri.parse('http://$laptopIp:8081/phone-notification'),
+          Uri.parse('http://$laptopIp:$kDaemonPort/phone-notification'),
           headers: const {'Content-Type': 'application/json'},
           body: json.encode(payload),
         )
-        .timeout(const Duration(seconds: 3));
+        .timeout(kShortTimeout);
 
     if (response.statusCode != 200) {
       throw Exception('Reverse sync failed (HTTP ${response.statusCode})');
@@ -96,9 +100,9 @@ class ApiService {
   }
 
   Future<List<FileInfo>> listFiles() async {
-    final response = await http
-        .get(Uri.parse('http://$laptopIp:8081/list-files'))
-        .timeout(const Duration(seconds: 5));
+    final response = await _httpClient
+        .get(Uri.parse('http://$laptopIp:$kDaemonPort/list-files'))
+        .timeout(kDefaultTimeout);
 
     if (response.statusCode == 200) {
       final decoded = json.decode(response.body);
@@ -121,13 +125,13 @@ class ApiService {
   }) async {
     try {
       await _dio.download(
-        'http://$laptopIp:8081/download/$filename',
+        'http://$laptopIp:$kDaemonPort/download/$filename',
         savePath,
         onReceiveProgress: (received, total) {
           if (total <= 0) return;
           onProgress(received / total);
         },
-        options: Options(receiveTimeout: const Duration(minutes: 5)),
+        options: Options(receiveTimeout: kUploadTimeout),
       );
     } on DioException catch (e) {
       final message = switch (e.type) {
