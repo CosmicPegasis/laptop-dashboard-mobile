@@ -1,11 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'providers/riverpod_providers.dart';
 import 'providers/settings_notifier.dart';
-import 'providers/stats_notifier.dart';
-import 'providers/logs_notifier.dart';
-import 'providers/upload_notifier.dart';
-import 'providers/notification_notifier.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/file_transfer_screen.dart';
 import 'screens/settings_screen.dart';
@@ -13,7 +10,7 @@ import 'screens/welcome_tour_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  runApp(ProviderScope(child: const MyApp()));
 }
 
 class MyApp extends StatelessWidget {
@@ -21,37 +18,26 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => SettingsNotifier()),
-        ChangeNotifierProvider(create: (_) => LogsNotifier()),
-        ChangeNotifierProvider(create: (_) => UploadNotifier()),
-        ChangeNotifierProvider(create: (_) => NotificationNotifier()),
-        ChangeNotifierProxyProvider<SettingsNotifier, StatsNotifier>(
-          create: (_) => StatsNotifier(),
-          update: (_, settings, stats) => stats!..updateFromSettings(settings),
-        ),
-      ],
-      child: MaterialApp(
-        title: 'Laptop Dashboard',
-        theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        ),
-        home: const MyHomePage(),
+    return MaterialApp(
+      title: 'Laptop Dashboard',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
       ),
+      home: const MyHomePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
+class MyHomePage extends ConsumerStatefulWidget {
   const MyHomePage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  ConsumerState<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
+class _MyHomePageState extends ConsumerState<MyHomePage>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
@@ -60,66 +46,71 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _initApp() async {
-    final settings = context.read<SettingsNotifier>();
-    final stats = context.read<StatsNotifier>();
-    final logs = context.read<LogsNotifier>();
-    final upload = context.read<UploadNotifier>();
-    final notifications = context.read<NotificationNotifier>();
+    await ref.read(settingsProvider.notifier).loadSettings();
 
-    await settings.loadSettings();
-
-    stats.initialize(settings);
-    upload.initialize(settings.laptopIp);
-    notifications.initializeApiService(settings.laptopIp);
+    ref
+        .read(statsProvider.notifier)
+        .updateFromSettings(ref.read(settingsProvider));
+    ref
+        .read(uploadProvider.notifier)
+        .initialize(ref.read(settingsProvider).laptopIp);
+    ref
+        .read(notificationProvider.notifier)
+        .initializeApiService(ref.read(settingsProvider).laptopIp);
 
     // Listen for settings changes
-    settings.addListener(() {
-      stats.updateFromSettings(settings);
-      notifications.initializeApiService(settings.laptopIp);
-      upload.updateApiService(settings.laptopIp);
+    ref.listen<SettingsState>(settingsProvider, (previous, next) {
+      ref.read(statsProvider.notifier).updateFromSettings(next);
+      ref
+          .read(notificationProvider.notifier)
+          .initializeApiService(next.laptopIp);
+      ref.read(uploadProvider.notifier).updateApiService(next.laptopIp);
     });
 
-    logs.addLog('Dashboard started');
+    ref.read(logsProvider.notifier).addLog('Dashboard started');
 
-    await notifications.initialize(
-      onNotificationTap: _handleNotificationTap,
-      onNotificationAction: _handleNotificationAction,
-    );
-    notifications.initializeApiService(settings.laptopIp);
+    await ref
+        .read(notificationProvider.notifier)
+        .initialize(
+          onNotificationTap: _handleNotificationTap,
+          onNotificationAction: _handleNotificationAction,
+        );
+    ref
+        .read(notificationProvider.notifier)
+        .initializeApiService(ref.read(settingsProvider).laptopIp);
 
     await _checkAndShowWelcomeTour();
   }
 
   void _handleNotificationTap(String? payload) {
     if (payload == 'file_transfer') {
-      context.read<SettingsNotifier>().setDrawerIndex(1);
+      ref.read(settingsProvider.notifier).setDrawerIndex(1);
     }
   }
 
   void _handleNotificationAction(String action) {
     if (action == 'download') {
-      context.read<SettingsNotifier>().setDrawerIndex(1);
+      ref.read(settingsProvider.notifier).setDrawerIndex(1);
     }
   }
 
   Future<void> _checkAndShowWelcomeTour() async {
-    final settings = context.read<SettingsNotifier>();
-    if (settings.hasSeenWelcomeTour) return;
+    if (ref.read(settingsProvider).hasSeenWelcomeTour) return;
     if (!mounted) return;
     await Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const WelcomeTourScreen()));
-    await settings.setHasSeenWelcomeTour(true);
-    context.read<LogsNotifier>().addLog('Welcome tour completed');
+    await ref.read(settingsProvider.notifier).setHasSeenWelcomeTour(true);
+    ref.read(logsProvider.notifier).addLog('Welcome tour completed');
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      final settings = context.read<SettingsNotifier>();
-      context.read<StatsNotifier>().onAppResumed(
-        settings.pollingIntervalSeconds,
-      );
+      final settings = ref.read(settingsProvider);
+      ref
+          .read(statsProvider.notifier)
+          .onAppResumed(settings.pollingIntervalSeconds);
     }
   }
 
@@ -131,34 +122,32 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<SettingsNotifier>(
-      builder: (context, settings, _) {
-        String appBarTitle = switch (settings.drawerIndex) {
-          1 => 'File Transfer',
-          2 => 'Settings',
-          _ => 'Laptop Dashboard',
-        };
+    final settings = ref.watch(settingsProvider);
+    String appBarTitle = switch (settings.drawerIndex) {
+      1 => 'File Transfer',
+      2 => 'Settings',
+      _ => 'Laptop Dashboard',
+    };
 
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(appBarTitle),
-            backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-          ),
-          drawer: _buildDrawer(settings),
-          body: IndexedStack(
-            index: settings.drawerIndex,
-            children: const [
-              DashboardScreen(),
-              FileTransferScreen(),
-              SettingsScreen(),
-            ],
-          ),
-        );
-      },
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(appBarTitle),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+      ),
+      drawer: _buildDrawer(),
+      body: IndexedStack(
+        index: settings.drawerIndex,
+        children: const [
+          DashboardScreen(),
+          FileTransferScreen(),
+          SettingsScreen(),
+        ],
+      ),
     );
   }
 
-  Widget _buildDrawer(SettingsNotifier settings) {
+  Widget _buildDrawer() {
+    final settings = ref.watch(settingsProvider);
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,
@@ -199,7 +188,7 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
       title: Text(title),
       selected: selectedIndex == index,
       onTap: () {
-        context.read<SettingsNotifier>().setDrawerIndex(index);
+        ref.read(settingsProvider.notifier).setDrawerIndex(index);
         Navigator.pop(context);
       },
     );

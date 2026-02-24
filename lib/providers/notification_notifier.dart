@@ -1,29 +1,58 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../services/notification_service.dart';
 import '../services/reverse_sync_service.dart';
 import '../services/api_service.dart';
 
-class NotificationNotifier extends ChangeNotifier {
+class NotificationNotifierState {
+  final bool notificationPermissionGranted;
+  final bool notificationPermissionChecked;
+  final bool reverseSyncPermissionGranted;
+  final bool reverseSyncPermissionChecked;
+
+  const NotificationNotifierState({
+    this.notificationPermissionGranted = false,
+    this.notificationPermissionChecked = false,
+    this.reverseSyncPermissionGranted = false,
+    this.reverseSyncPermissionChecked = false,
+  });
+
+  NotificationNotifierState copyWith({
+    bool? notificationPermissionGranted,
+    bool? notificationPermissionChecked,
+    bool? reverseSyncPermissionGranted,
+    bool? reverseSyncPermissionChecked,
+  }) {
+    return NotificationNotifierState(
+      notificationPermissionGranted:
+          notificationPermissionGranted ?? this.notificationPermissionGranted,
+      notificationPermissionChecked:
+          notificationPermissionChecked ?? this.notificationPermissionChecked,
+      reverseSyncPermissionGranted:
+          reverseSyncPermissionGranted ?? this.reverseSyncPermissionGranted,
+      reverseSyncPermissionChecked:
+          reverseSyncPermissionChecked ?? this.reverseSyncPermissionChecked,
+    );
+  }
+}
+
+class NotificationNotifier extends StateNotifier<NotificationNotifierState> {
   final NotificationService _notificationService;
   final ReverseSyncService _reverseSyncService;
   ApiService? _apiService;
-
-  bool _notificationPermissionGranted = false;
-  bool _notificationPermissionChecked = false;
-  bool _reverseSyncPermissionGranted = false;
-  bool _reverseSyncPermissionChecked = false;
 
   NotificationNotifier({
     NotificationService? notificationService,
     ReverseSyncService? reverseSyncService,
   }) : _notificationService = notificationService ?? NotificationService(),
-       _reverseSyncService = reverseSyncService ?? ReverseSyncService();
+       _reverseSyncService = reverseSyncService ?? ReverseSyncService(),
+       super(const NotificationNotifierState());
 
-  bool get notificationPermissionGranted => _notificationPermissionGranted;
-  bool get notificationPermissionChecked => _notificationPermissionChecked;
-  bool get reverseSyncPermissionGranted => _reverseSyncPermissionGranted;
-  bool get reverseSyncPermissionChecked => _reverseSyncPermissionChecked;
+  bool get notificationPermissionGranted => state.notificationPermissionGranted;
+  bool get notificationPermissionChecked => state.notificationPermissionChecked;
+  bool get reverseSyncPermissionGranted => state.reverseSyncPermissionGranted;
+  bool get reverseSyncPermissionChecked => state.reverseSyncPermissionChecked;
   bool get isReverseSyncSupported => _reverseSyncService.isSupported;
 
   Future<void> initialize({
@@ -46,17 +75,17 @@ class NotificationNotifier extends ChangeNotifier {
     final reverseSyncGranted = await _reverseSyncService
         .isNotificationAccessEnabled();
 
-    _notificationPermissionGranted = notifGranted;
-    _notificationPermissionChecked = true;
-    _reverseSyncPermissionGranted = reverseSyncGranted;
-    _reverseSyncPermissionChecked = true;
-    notifyListeners();
+    state = state.copyWith(
+      notificationPermissionGranted: notifGranted,
+      notificationPermissionChecked: true,
+      reverseSyncPermissionGranted: reverseSyncGranted,
+      reverseSyncPermissionChecked: true,
+    );
   }
 
   Future<bool> requestNotificationPermission() async {
     final granted = await _notificationService.checkAndRequestPermission();
-    _notificationPermissionGranted = granted;
-    notifyListeners();
+    state = state.copyWith(notificationPermissionGranted: granted);
     return granted;
   }
 
@@ -72,10 +101,11 @@ class NotificationNotifier extends ChangeNotifier {
       await _reverseSyncService.stopListening();
     } else {
       final granted = await _reverseSyncService.isNotificationAccessEnabled();
-      _reverseSyncPermissionGranted = granted;
-      _reverseSyncPermissionChecked = true;
+      state = state.copyWith(
+        reverseSyncPermissionGranted: granted,
+        reverseSyncPermissionChecked: true,
+      );
     }
-    notifyListeners();
   }
 
   void openNotificationAccessSettings() {

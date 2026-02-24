@@ -1,59 +1,74 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../constants.dart';
 import '../models/app_stats.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import 'settings_notifier.dart';
 
-class StatsNotifier extends ChangeNotifier {
-  final NotificationService _notificationService;
+class StatsState {
+  final AppStats stats;
+  final bool isSleeping;
+  final bool isFetchingStats;
+  final int fetchCount;
+  final int consecutiveFailures;
+  final bool offlineNotificationShown;
 
+  StatsState({
+    AppStats? stats,
+    bool? isSleeping,
+    bool? isFetchingStats,
+    int? fetchCount,
+    int? consecutiveFailures,
+    bool? offlineNotificationShown,
+  }) : stats =
+           stats ??
+           AppStats(cpu: 0, ram: 0, temp: 0, battery: 0, isPlugged: false),
+       isSleeping = isSleeping ?? false,
+       isFetchingStats = isFetchingStats ?? false,
+       fetchCount = fetchCount ?? 0,
+       consecutiveFailures = consecutiveFailures ?? 0,
+       offlineNotificationShown = offlineNotificationShown ?? false;
+
+  StatsState copyWith({
+    AppStats? stats,
+    bool? isSleeping,
+    bool? isFetchingStats,
+    int? fetchCount,
+    int? consecutiveFailures,
+    bool? offlineNotificationShown,
+  }) {
+    return StatsState(
+      stats: stats ?? this.stats,
+      isSleeping: isSleeping ?? this.isSleeping,
+      isFetchingStats: isFetchingStats ?? this.isFetchingStats,
+      fetchCount: fetchCount ?? this.fetchCount,
+      consecutiveFailures: consecutiveFailures ?? this.consecutiveFailures,
+      offlineNotificationShown:
+          offlineNotificationShown ?? this.offlineNotificationShown,
+    );
+  }
+
+  double get cpu => stats.cpu;
+  double get ram => stats.ram;
+  double get temp => stats.temp;
+  double get battery => stats.battery;
+  bool get isPlugged => stats.isPlugged;
+  bool get isOffline => consecutiveFailures >= kMaxFailuresOffline;
+}
+
+class StatsNotifier extends StateNotifier<StatsState> {
+  final NotificationService _notificationService;
   ApiService? _apiService;
   Timer? _timer;
-  int _fetchCount = 0;
-  bool _isSleeping = false;
-  bool _isFetchingStats = false;
-  int _consecutiveFailures = 0;
-  bool _offlineNotificationShown = false;
   static const int _offlineNotificationId = 1;
-  static const int _maxFailuresBeforeOffline = kMaxFailuresOffline;
-
-  AppStats _stats = AppStats(
-    cpu: 0,
-    ram: 0,
-    temp: 0,
-    battery: 0,
-    isPlugged: false,
-  );
 
   StatsNotifier({NotificationService? notificationService})
-    : _notificationService = notificationService ?? NotificationService();
+    : _notificationService = notificationService ?? NotificationService(),
+      super(StatsState());
 
-  AppStats get stats => _stats;
-  double get cpu => _stats.cpu;
-  double get ram => _stats.ram;
-  double get temp => _stats.temp;
-  double get battery => _stats.battery;
-  bool get isPlugged => _stats.isPlugged;
-  bool get isSleeping => _isSleeping;
-  bool get isFetchingStats => _isFetchingStats;
-  int get fetchCount => _fetchCount;
-  int get consecutiveFailures => _consecutiveFailures;
-  bool get isOffline => _consecutiveFailures >= _maxFailuresBeforeOffline;
-
-  void initialize(SettingsNotifier settings) {
-    _apiService = ApiService(laptopIp: settings.laptopIp);
-    startTimer(settings.pollingIntervalSeconds);
-    settings.addListener(_onSettingsChanged);
-  }
-
-  void _onSettingsChanged() {
-    // This will be called when settings change, but we can't use context here
-    // We'll need to handle it differently - by checking the settings in main.dart
-  }
-
-  void updateFromSettings(SettingsNotifier settings) {
+  void updateFromSettings(SettingsState settings) {
     _apiService = ApiService(laptopIp: settings.laptopIp);
     restartTimer(settings.pollingIntervalSeconds);
   }
@@ -75,42 +90,37 @@ class StatsNotifier extends ChangeNotifier {
   }
 
   Future<void> _fetchStats() async {
-    if (_isFetchingStats || _apiService == null) return;
-    _isFetchingStats = true;
-    notifyListeners();
+    if (state.isFetchingStats || _apiService == null) return;
+    state = state.copyWith(isFetchingStats: true);
 
     try {
-      final stats = await _apiService!.fetchStats();
-      _stats = stats;
-      _markOnline();
+      final newStats = await _apiService!.fetchStats();
+      state = state.copyWith(stats: newStats, fetchCount: state.fetchCount + 1);
+      await _markOnline();
       await _updateForegroundService();
-      _fetchCount++;
-      notifyListeners();
     } catch (e) {
       await _markOffline(e.toString().split('\n').first);
     } finally {
-      _isFetchingStats = false;
-      notifyListeners();
+      state = state.copyWith(isFetchingStats: false);
     }
   }
 
   Future<void> _updateForegroundService() async {
     await _notificationService.updateForegroundService(
-      cpu: _stats.cpu,
-      ram: _stats.ram,
-      temp: _stats.temp,
-      battery: _stats.battery,
-      isPlugged: _stats.isPlugged,
+      cpu: state.cpu,
+      ram: state.ram,
+      temp: state.temp,
+      battery: state.battery,
+      isPlugged: state.isPlugged,
     );
   }
 
   Future<void> _markOffline(String reason) async {
-    _consecutiveFailures++;
-    if (_consecutiveFailures < _maxFailuresBeforeOffline) {
-      return;
-    }
-    if (!_offlineNotificationShown && _apiService != null) {
-      _offlineNotificationShown = true;
+    final newFailures = state.consecutiveFailures + 1;
+    state = state.copyWith(consecutiveFailures: newFailures);
+    if (newFailures < kMaxFailuresOffline) return;
+    if (!state.offlineNotificationShown && _apiService != null) {
+      state = state.copyWith(offlineNotificationShown: true);
       await _notificationService.showOfflineNotification(
         _offlineNotificationId,
         _apiService!.laptopIp,
@@ -119,22 +129,23 @@ class StatsNotifier extends ChangeNotifier {
   }
 
   Future<void> _markOnline() async {
-    _consecutiveFailures = 0;
-    if (!_offlineNotificationShown) return;
-    _offlineNotificationShown = false;
+    if (state.consecutiveFailures == 0 || !state.offlineNotificationShown) {      
+        return;
+    }
+    state = state.copyWith(
+      consecutiveFailures: 0,
+      offlineNotificationShown: false,
+    );
     await _notificationService.cancelNotification(_offlineNotificationId);
   }
 
   Future<void> sleepLaptop() async {
-    if (_isSleeping || _apiService == null) return;
-    _isSleeping = true;
-    notifyListeners();
-
+    if (state.isSleeping || _apiService == null) return;
+    state = state.copyWith(isSleeping: true);
     try {
       await _apiService!.sleepLaptop();
     } finally {
-      _isSleeping = false;
-      notifyListeners();
+      state = state.copyWith(isSleeping: false);
     }
   }
 

@@ -1,71 +1,94 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../services/storage_service.dart';
 
-class SettingsNotifier extends ChangeNotifier {
-  final StorageService _storageService;
-
-  SettingsNotifier({StorageService? storageService})
-    : _storageService = storageService ?? StorageService();
-
-  String _laptopIp = 'localhost';
-  int _pollingIntervalSeconds = 2;
-  int _drawerIndex = 0;
-  bool _hasSeenWelcomeTour = false;
-  bool _reverseSyncEnabled = false;
+class SettingsState {
+  final String laptopIp;
+  final int pollingIntervalSeconds;
+  final int drawerIndex;
+  final bool hasSeenWelcomeTour;
+  final bool reverseSyncEnabled;
 
   static const int minPollingIntervalSeconds = 1;
   static const int maxPollingIntervalSeconds = 30;
 
-  String get laptopIp => _laptopIp;
-  int get pollingIntervalSeconds => _pollingIntervalSeconds;
-  int get drawerIndex => _drawerIndex;
-  bool get hasSeenWelcomeTour => _hasSeenWelcomeTour;
-  bool get reverseSyncEnabled => _reverseSyncEnabled;
+  SettingsState({
+    this.laptopIp = 'localhost',
+    this.pollingIntervalSeconds = 2,
+    this.drawerIndex = 0,
+    this.hasSeenWelcomeTour = false,
+    this.reverseSyncEnabled = false,
+  });
+
+  SettingsState copyWith({
+    String? laptopIp,
+    int? pollingIntervalSeconds,
+    int? drawerIndex,
+    bool? hasSeenWelcomeTour,
+    bool? reverseSyncEnabled,
+  }) {
+    return SettingsState(
+      laptopIp: laptopIp ?? this.laptopIp,
+      pollingIntervalSeconds:
+          pollingIntervalSeconds ?? this.pollingIntervalSeconds,
+      drawerIndex: drawerIndex ?? this.drawerIndex,
+      hasSeenWelcomeTour: hasSeenWelcomeTour ?? this.hasSeenWelcomeTour,
+      reverseSyncEnabled: reverseSyncEnabled ?? this.reverseSyncEnabled,
+    );
+  }
+}
+
+class SettingsNotifier extends StateNotifier<SettingsState> {
+  final StorageService _storageService;
+
+  SettingsNotifier({StorageService? storageService})
+    : _storageService = storageService ?? StorageService(),
+      super(SettingsState());
 
   Future<void> loadSettings() async {
-    _laptopIp = await _storageService.getLaptopIp();
-    _pollingIntervalSeconds = await _storageService.getPollingInterval();
-    _hasSeenWelcomeTour = await _storageService.getHasSeenWelcomeTour();
-    _reverseSyncEnabled = await _storageService.getReverseSyncEnabled();
-    notifyListeners();
+    final ip = await _storageService.getLaptopIp();
+    final polling = await _storageService.getPollingInterval();
+    final tour = await _storageService.getHasSeenWelcomeTour();
+    final reverse = await _storageService.getReverseSyncEnabled();
+    state = state.copyWith(
+      laptopIp: ip,
+      pollingIntervalSeconds: polling,
+      hasSeenWelcomeTour: tour,
+      reverseSyncEnabled: reverse,
+    );
   }
 
   Future<void> setLaptopIp(String ip) async {
     final newIp = ip.trim().isEmpty ? 'localhost' : ip.trim();
-    if (newIp == _laptopIp) return;
-    _laptopIp = newIp;
+    if (newIp == state.laptopIp) return;
+    state = state.copyWith(laptopIp: newIp);
     await _storageService.saveLaptopIp(newIp);
-    notifyListeners();
   }
 
   Future<void> setPollingInterval(int seconds) async {
     final normalized = seconds.clamp(
-      minPollingIntervalSeconds,
-      maxPollingIntervalSeconds,
+      SettingsState.minPollingIntervalSeconds,
+      SettingsState.maxPollingIntervalSeconds,
     );
-    if (normalized == _pollingIntervalSeconds) return;
-    _pollingIntervalSeconds = normalized;
+    if (normalized == state.pollingIntervalSeconds) return;
+    state = state.copyWith(pollingIntervalSeconds: normalized);
     await _storageService.savePollingInterval(normalized);
-    notifyListeners();
   }
 
   void setDrawerIndex(int index) {
-    if (_drawerIndex == index) return;
-    _drawerIndex = index;
-    notifyListeners();
+    if (state.drawerIndex == index) return;
+    state = state.copyWith(drawerIndex: index);
   }
 
   Future<void> setHasSeenWelcomeTour(bool seen) async {
-    if (_hasSeenWelcomeTour == seen) return;
-    _hasSeenWelcomeTour = seen;
+    if (state.hasSeenWelcomeTour == seen) return;
+    state = state.copyWith(hasSeenWelcomeTour: seen);
     await _storageService.saveHasSeenWelcomeTour(seen);
-    notifyListeners();
   }
 
   Future<void> setReverseSyncEnabled(bool enabled) async {
-    if (_reverseSyncEnabled == enabled) return;
-    _reverseSyncEnabled = enabled;
+    if (state.reverseSyncEnabled == enabled) return;
+    state = state.copyWith(reverseSyncEnabled: enabled);
     await _storageService.saveReverseSyncEnabled(enabled);
-    notifyListeners();
   }
 }

@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants.dart';
-import '../providers/stats_notifier.dart';
-import '../providers/logs_notifier.dart';
+import '../providers/riverpod_providers.dart';
 import '../widgets/status_card.dart';
 import '../widgets/log_card.dart';
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return SingleChildScrollView(
       child: Center(
         child: Column(
@@ -26,12 +25,13 @@ class DashboardScreen extends StatelessWidget {
               child: SizedBox(
                 width: double.infinity,
                 height: 60,
-                child: Consumer<StatsNotifier>(
-                  builder: (context, stats, _) {
+                child: Builder(
+                  builder: (context) {
+                    final stats = ref.watch(statsProvider);
                     return ElevatedButton.icon(
                       onPressed: stats.isSleeping
                           ? null
-                          : () => _showSleepConfirmation(context),
+                          : () => _showSleepConfirmation(context, ref),
                       icon: stats.isSleeping
                           ? SizedBox(
                               width: kStatusIconSize,
@@ -59,7 +59,7 @@ class DashboardScreen extends StatelessWidget {
     );
   }
 
-  void _showSleepConfirmation(BuildContext context) {
+  void _showSleepConfirmation(BuildContext context, WidgetRef ref) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -75,8 +75,8 @@ class DashboardScreen extends StatelessWidget {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              context.read<StatsNotifier>().sleepLaptop();
-              context.read<LogsNotifier>().addLog('Laptop going to sleep');
+              ref.read(statsProvider.notifier).sleepLaptop();
+              ref.read(logsProvider.notifier).addLog('Laptop going to sleep');
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
             child: const Text('Sleep', style: TextStyle(color: Colors.white)),

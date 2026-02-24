@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants.dart';
 import '../providers/settings_notifier.dart';
-import '../providers/notification_notifier.dart';
+import '../providers/riverpod_providers.dart';
 import '../widgets/notification_permission_card.dart';
 
-class SettingsScreen extends StatefulWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late TextEditingController _ipController;
 
   @override
@@ -20,7 +20,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _ipController = TextEditingController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final settings = context.read<SettingsNotifier>();
+      final settings = ref.read(settingsProvider);
       _ipController.text = settings.laptopIp;
     });
   }
@@ -33,8 +33,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<SettingsNotifier>(
-      builder: (context, settings, _) {
+    return Consumer(
+      builder: (context, ref, _) {
+        final settings = ref.watch(settingsProvider);
         return SingleChildScrollView(
           child: Padding(
             padding: EdgeInsets.symmetric(
@@ -44,15 +45,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Consumer<NotificationNotifier>(
-                  builder: (context, notifications, _) {
+                Consumer(
+                  builder: (context, ref, _) {
+                    final notifications = ref.watch(notificationProvider);
                     if (notifications.notificationPermissionChecked &&
                         !notifications.notificationPermissionGranted) {
                       return Column(
                         children: [
                           NotificationPermissionCard(
-                            onRequestPermission:
-                                notifications.requestNotificationPermission,
+                            onRequestPermission: () => ref
+                                .read(notificationProvider.notifier)
+                                .requestNotificationPermission(),
                           ),
                           const SizedBox(height: kMediumSpacing),
                         ],
@@ -77,7 +80,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     hintText: 'e.g. 192.168.1.10',
                     border: OutlineInputBorder(),
                   ),
-                  onChanged: (value) => settings.setLaptopIp(value),
+                  onChanged: (value) =>
+                      ref.read(settingsProvider.notifier).setLaptopIp(value),
                 ),
                 const SizedBox(height: 10),
                 Text(
@@ -91,15 +95,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 8),
                 Slider(
-                  min: SettingsNotifier.minPollingIntervalSeconds.toDouble(),
-                  max: SettingsNotifier.maxPollingIntervalSeconds.toDouble(),
+                  min: SettingsState.minPollingIntervalSeconds.toDouble(),
+                  max: SettingsState.maxPollingIntervalSeconds.toDouble(),
                   divisions:
-                      SettingsNotifier.maxPollingIntervalSeconds -
-                      SettingsNotifier.minPollingIntervalSeconds,
+                      SettingsState.maxPollingIntervalSeconds -
+                      SettingsState.minPollingIntervalSeconds,
                   label: '${settings.pollingIntervalSeconds}s',
                   value: settings.pollingIntervalSeconds.toDouble(),
-                  onChanged: (value) =>
-                      settings.setPollingInterval(value.round()),
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setPollingInterval(value.round()),
                 ),
                 Text(
                   'Current interval: ${settings.pollingIntervalSeconds}s',
@@ -111,7 +116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: kMediumSpacing),
-                _buildReverseSyncCard(settings),
+                _buildReverseSyncCard(ref, settings),
               ],
             ),
           ),
@@ -120,10 +125,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildReverseSyncCard(SettingsNotifier settings) {
-    return Consumer<NotificationNotifier>(
-      builder: (context, notifications, _) {
-        if (!notifications.isReverseSyncSupported) {
+  Widget _buildReverseSyncCard(WidgetRef ref, SettingsState settings) {
+    return Consumer(
+      builder: (context, widgetRef, _) {
+        final notificationsState = ref.watch(notificationProvider);
+        final notificationsNotifier = ref.watch(notificationProvider.notifier);
+        if (!notificationsNotifier.isReverseSyncSupported) {
           return const Card(
             child: Padding(
               padding: EdgeInsets.all(14),
@@ -148,15 +155,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   value: settings.reverseSyncEnabled,
                   onChanged: (enabled) {
-                    notifications.setReverseSyncEnabled(
+                    notificationsNotifier.setReverseSyncEnabled(
                       enabled,
-                      settings.setReverseSyncEnabled,
+                      (value) => ref
+                          .read(settingsProvider.notifier)
+                          .setReverseSyncEnabled(value),
                     );
                   },
                 ),
                 if (settings.reverseSyncEnabled &&
-                    notifications.reverseSyncPermissionChecked &&
-                    !notifications.reverseSyncPermissionGranted) ...[
+                    notificationsState.reverseSyncPermissionChecked &&
+                    !notificationsState.reverseSyncPermissionGranted) ...[
                   const SizedBox(height: 8),
                   const Text(
                     'Notification access is required. Enable this app in Android notification access settings.',
@@ -165,13 +174,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: OutlinedButton(
-                      onPressed: notifications.openNotificationAccessSettings,
+                      onPressed:
+                          notificationsNotifier.openNotificationAccessSettings,
                       child: const Text('Open notification access'),
                     ),
                   ),
                 ],
                 if (settings.reverseSyncEnabled &&
-                    notifications.reverseSyncPermissionGranted) ...[
+                    notificationsState.reverseSyncPermissionGranted) ...[
                   const SizedBox(height: 8),
                   const Text(
                     'Notification access granted. New phone notifications will appear on your laptop.',

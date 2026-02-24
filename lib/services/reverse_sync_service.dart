@@ -21,7 +21,10 @@ class ReverseSyncService {
 
   Future<bool> isNotificationAccessEnabled() async {
     if (!isSupported) return false;
-    return await _methodChannel.invokeMethod<bool>('isNotificationAccessEnabled') ?? false;
+    return await _methodChannel.invokeMethod<bool>(
+          'isNotificationAccessEnabled',
+        ) ??
+        false;
   }
 
   Future<void> openNotificationAccessSettings() async {
@@ -35,16 +38,13 @@ class ReverseSyncService {
   }) {
     if (!isSupported || _subscription != null) return;
 
-    _subscription = _eventChannel.receiveBroadcastStream().listen(
-      (event) {
-        if (event is! Map) return;
-        final map = Map<String, dynamic>.from(event);
-        if (_shouldForward(map)) {
-          onEvent(map);
-        }
-      },
-      onError: onError,
-    );
+    _subscription = _eventChannel.receiveBroadcastStream().listen((event) {
+      if (event is! Map) return;
+      final map = Map<String, dynamic>.from(event);
+      if (_shouldForward(map)) {
+        onEvent(map);
+      }
+    }, onError: onError);
   }
 
   Future<void> stopListening() async {
@@ -83,5 +83,4 @@ class ReverseSyncService {
 
     return true;
   }
-
 }

@@ -1,60 +1,57 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants.dart';
 import '../providers/upload_notifier.dart';
-import '../providers/settings_notifier.dart';
+import '../providers/riverpod_providers.dart';
 
-class FileTransferScreen extends StatefulWidget {
+class FileTransferScreen extends ConsumerStatefulWidget {
   const FileTransferScreen({super.key});
 
   @override
-  State<FileTransferScreen> createState() => _FileTransferScreenState();
+  ConsumerState<FileTransferScreen> createState() => _FileTransferScreenState();
 }
 
-class _FileTransferScreenState extends State<FileTransferScreen> {
+class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final settings = context.read<SettingsNotifier>();
-    context.read<UploadNotifier>().setActive(
-      settings.drawerIndex == 1,
-      settings.pollingIntervalSeconds,
-    );
+    final settings = ref.read(settingsProvider);
+    ref
+        .read(uploadProvider.notifier)
+        .setActive(settings.drawerIndex == 1, settings.pollingIntervalSeconds);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer2<UploadNotifier, SettingsNotifier>(
-      builder: (context, upload, settings, _) {
-        if (upload.pendingSharedFiles.isNotEmpty) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            upload.uploadSharedFiles();
-          });
-        }
+    final upload = ref.watch(uploadProvider);
+    final settings = ref.watch(settingsProvider);
+    if (upload.pendingSharedFiles.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(uploadProvider.notifier).uploadSharedFiles();
+      });
+    }
 
-        return SingleChildScrollView(
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: kHorizontalPadding,
-              vertical: kLargeSpacing,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildUploadSection(context, upload, settings.laptopIp),
-                const Divider(height: 40, thickness: 1),
-                _buildDownloadSection(context, upload),
-              ],
-            ),
-          ),
-        );
-      },
+    return SingleChildScrollView(
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: kHorizontalPadding,
+          vertical: kLargeSpacing,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildUploadSection(ref, upload, settings.laptopIp),
+            const Divider(height: 40, thickness: 1),
+            _buildDownloadSection(ref, upload),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _buildUploadSection(
-    BuildContext context,
-    UploadNotifier upload,
+    WidgetRef ref,
+    UploadNotifierState upload,
     String laptopIp,
   ) {
     return Column(
@@ -77,7 +74,7 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
           child: ElevatedButton.icon(
             onPressed: upload.upload.isUploading
                 ? null
-                : () => upload.pickAndUploadFile(),
+                : () => ref.read(uploadProvider.notifier).pickAndUploadFile(),
             icon: upload.upload.isUploading
                 ? const SizedBox(
                     width: 20,
@@ -152,7 +149,7 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
     );
   }
 
-  Widget _buildDownloadSection(BuildContext context, UploadNotifier upload) {
+  Widget _buildDownloadSection(WidgetRef ref, UploadNotifierState upload) {
     final newFiles = upload.availableFiles
         .where((f) => !upload.seenFiles.contains(f.name))
         .toList();
@@ -225,7 +222,7 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
     );
   }
 
-  Widget _buildFileList(BuildContext context, UploadNotifier upload) {
+  Widget _buildFileList(BuildContext context, UploadNotifierState upload) {
     return ListView.separated(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -323,7 +320,9 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
                   child: OutlinedButton.icon(
                     onPressed: isFileDownloading
                         ? null
-                        : () => upload.downloadFile(file),
+                        : () => ref
+                              .read(uploadProvider.notifier)
+                              .downloadFile(file),
                     icon: Icon(
                       progress == 1.0 ? Icons.refresh : Icons.download,
                       size: 18,
